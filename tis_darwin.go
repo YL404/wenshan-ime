@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -64,7 +65,9 @@ func selectOwnInputSource() error {
 		if t.string(t.getProperty(src, key)) != inputMode {
 			continue
 		}
-		t.selectSource(src)
+		if rc := t.selectSource(src); rc != 0 {
+			return fmt.Errorf("TISSelectInputSource 返回 %d", rc)
+		}
 		logf("已重新选中输入源 %s", inputMode)
 		return nil
 	}
