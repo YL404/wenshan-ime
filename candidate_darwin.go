@@ -96,7 +96,9 @@ type candWindow struct {
 	// 量文字宽度用的属性字典，只建一次。
 	attrs objc.ID
 
-	// CGColor 的生命周期跟着 NSColor 走，所以原色也得留住。
+	// NSColor.CGColor 返回的只是借用：动态语义色（selectedContentBackgroundColor）
+	// 的 CGColor 由 autorelease pool 管着，事件循环一排水就成野指针，
+	// 所以也要像 NSColor 一样显式 retain。
 	panelColor objc.ID
 	chipColor  objc.ID
 	clearColor objc.ID
@@ -139,9 +141,9 @@ func (c *candWindow) ensure() bool {
 		c.chipColor = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedRed, 0.20, 0.45, 0.85, 1.0))
 	}
 	c.clearColor = keep(send(objc.ID(objc.GetClass("NSColor")), selClearColor))
-	c.panelBG = send(c.panelColor, selCGColor)
-	c.chipBG = send(c.chipColor, selCGColor)
-	c.clearBG = send(c.clearColor, selCGColor)
+	c.panelBG = keep(send(c.panelColor, selCGColor))
+	c.chipBG = keep(send(c.chipColor, selCGColor))
+	c.clearBG = keep(send(c.clearColor, selCGColor))
 	// sizeWithAttributes: 直接量文字本身，避免把 NSTextField 的 cell 边距也算进色块。
 	fontKey := nsString("NSFont")
 	c.attrs = keep(send(objc.ID(objc.GetClass("NSDictionary")), selDictWithObject, c.font, fontKey))
