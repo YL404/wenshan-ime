@@ -364,7 +364,9 @@ func applyPreedit(client objc.ID) {
 	}
 	ns := nsString(string(buf))
 	// 光标停在预编辑串末尾；缓冲是纯字母，UTF-16 长度等于字节数。
-	send(client, selSetMarkedText, ns, uintptr(len(buf)), 0, nsNotFound, 0)
+	if clientCan(client, selSetMarkedText) {
+		send(client, selSetMarkedText, ns, uintptr(len(buf)), 0, nsNotFound, 0)
+	}
 	send(ns, selRelease)
 	showCandidates(client)
 }
@@ -409,15 +411,28 @@ func commitRaw(client objc.ID) bool {
 }
 
 func insertText(client objc.ID, text string) {
+	if !clientCan(client, selInsertText) {
+		return
+	}
 	ns := nsString(text)
 	send(client, selInsertText, ns, nsNotFound, 0)
 	send(ns, selRelease)
 }
 
 func clearMarked(client objc.ID) {
+	if !clientCan(client, selSetMarkedText) {
+		return
+	}
 	ns := nsString("")
 	send(client, selSetMarkedText, ns, 0, 0, nsNotFound, 0)
 	send(ns, selRelease)
+}
+
+// clientCan 问客户端是否实现了某个方法。IMK 客户端理论上都要实现
+// IMKTextInput，但真有不实现的应用：对它发消息会抛 NSException，
+// 输入法是常驻进程，一个异常就没了。
+func clientCan(client objc.ID, sel objc.SEL) bool {
+	return client != 0 && send(client, selRespondsToSelector, sel) != 0
 }
 
 // showCandidates 先把候选窗放好，再让应用去排版预编辑串：候选窗的延迟因此
