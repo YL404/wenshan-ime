@@ -113,9 +113,6 @@ func writePNG(path string, img image.Image) error {
 // 绘制顺序就是深度顺序：日最远，墨山最近。
 func renderApp(size int) *image.RGBA {
 	ss := 4
-	if size >= 512 {
-		ss = 2
-	}
 	w := size * ss
 	img := image.NewRGBA(image.Rect(0, 0, w, w))
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: paper}, image.Point{}, draw.Src)
@@ -127,9 +124,10 @@ func renderApp(size int) *image.RGBA {
 	fillA(img, paper, 0.65, scalePoints(mist(62, 74), s))
 	fill(img, washNear, scalePoints(ridge(62, 56, 34, 73, 88, 70, -10, 110, 88), s))
 	fill(img, ink, scalePoints(ridge(40, 53, 6, 71, 66, 62, -10, 110, 95), s))
-	maskSquircle(img)
 
-	return downsample(img, ss)
+	out := downsample(img, ss)
+	maskSquircle(out)
+	return out
 }
 
 // renderMenu 画菜单栏模板：圆角方块挖掉一座山。
@@ -298,17 +296,34 @@ func fillRoundedRect(img *image.RGBA, c color.RGBA, x0, y0, x1, y1, r float64) {
 }
 
 // maskSquircle 把 10-90 之外的像素清掉，留下圆角方形底板。
+// 边界按到超椭圆的距离换算覆盖率，边沿有一像素宽的过渡；
+// 若只按整像素裁，底边这种接近水平的长弧会留下台阶。
 func maskSquircle(img *image.RGBA) {
 	b := img.Bounds()
-	n := float64(b.Dx())
+	n := float64(b.Dx()) / 100 // 1 个 0-100 坐标单位对应的像素数
 	for y := 0; y < b.Dy(); y++ {
-		ny := math.Abs((float64(y)+0.5)/n*100-50) / 40
-		yn := math.Pow(ny, 5)
+		v := math.Abs((float64(y)+0.5)/n-50) / 40
+		v4 := v * v * v * v
 		for x := 0; x < b.Dx(); x++ {
-			nx := math.Abs((float64(x)+0.5)/n*100-50) / 40
-			if math.Pow(nx, 5)+yn > 1 {
-				img.SetRGBA(x, y, color.RGBA{})
+			u := math.Abs((float64(x)+0.5)/n-50) / 40
+			u4 := u * u * u * u
+			// f 是超椭圆隐函数，f/|grad f| 是到边界的距离（0-100 坐标单位）。
+			f := u4*u + v4*v - 1
+			g := 5 * math.Hypot(u4, v4) / 40
+			if g == 0 {
+				continue
 			}
+			cov := min(max(0.5-f/g*n, 0), 1)
+			if cov >= 1 {
+				continue
+			}
+			c := img.RGBAAt(x, y)
+			img.SetRGBA(x, y, color.RGBA{
+				R: uint8(float64(c.R)*cov + 0.5),
+				G: uint8(float64(c.G)*cov + 0.5),
+				B: uint8(float64(c.B)*cov + 0.5),
+				A: uint8(float64(c.A)*cov + 0.5),
+			})
 		}
 	}
 }
