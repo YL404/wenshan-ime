@@ -1,6 +1,6 @@
 name: Wenshan
 options:
-  bundleIdPrefix: im.wenshan.inputmethod
+  bundleIdPrefix: im.wenshan
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -33,7 +33,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.inputmethod.Wenshan.ios
+        PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.ios
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
@@ -51,7 +51,7 @@ targets:
       - target: WenshanHost
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.inputmethod.Wenshan.ios.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.ios.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: WenshanHost
 
@@ -78,7 +78,7 @@ targets:
             RequestsOpenAccess: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.inputmethod.Wenshan.ios.keyboard
+        PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.ios.keyboard
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
