@@ -10,9 +10,12 @@ final class KeyboardViewController: UIInputViewController {
     private let keyboardStack = UIStackView()
     private let root = UIStackView()
     private let keyPreview = KeyPreviewView()
+    private let keyEvents = KeyEventQueue()
+    private let keyFeedback = UIImpactFeedbackGenerator(style: .light)
+    private let selectionFeedback = UISelectionFeedbackGenerator()
     private var heightConstraint: NSLayoutConstraint!
     private var candidateHeightConstraint: NSLayoutConstraint!
-    private var metrics = KeyboardMetrics.make(screen: .zero, width: 0, isPad: false)
+    private var metrics = KeyboardMetrics.make(screen: .zero, width: 0, isPad: false, isFloating: false)
 
     private var shiftButton: KeyButton?
     private var modeButton: KeyButton?
@@ -25,6 +28,12 @@ final class KeyboardViewController: UIInputViewController {
 
     private let letterRows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
     private let symbolRows = ["1234567890", "-/:;()¥&@\"", "。？！，、；：…"]
+    private static let symbolAlternates: [String: String] = [
+        "。": "…", "，": "、", "？": "！", "！": "？",
+        "：": "；", "；": "：", "、": "，", "…": "。",
+        "-": "—", "/": "\\", "(": "[", ")": "]",
+        "¥": "$", "@": "#", "&": "*", "\"": "'", "'": "\"",
+    ]
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -37,6 +46,8 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         updateContext()
+        keyFeedback.prepare()
+        selectionFeedback.prepare()
         if model.phase != .ready {
             loadEngine()
         }
@@ -103,10 +114,12 @@ final class KeyboardViewController: UIInputViewController {
         candidateBar.setCandidateFont(.systemFont(ofSize: metrics.candidateFontSize))
         candidateBar.onSelect = { [weak self] index in
             guard let self else { return }
+            self.playSelectionFeedback()
             self.apply(self.model.select(index))
         }
         candidateBar.onPage = { [weak self] delta in
             guard let self else { return }
+            self.playSelectionFeedback()
             self.apply(self.model.page(delta))
         }
         candidateBar.onDismiss = { [weak self] in
@@ -141,10 +154,13 @@ final class KeyboardViewController: UIInputViewController {
     private func currentMetrics() -> KeyboardMetrics {
         let screen = view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
         let width = view.bounds.width > 0 ? view.bounds.width : screen.width
+        let isPad = traitCollection.userInterfaceIdiom == .pad
+        let isFloating = isPad && width < screen.width * 0.9 && width < screen.height
         return KeyboardMetrics.make(
             screen: screen,
             width: width,
-            isPad: traitCollection.userInterfaceIdiom == .pad)
+            isPad: isPad,
+            isFloating: isFloating)
     }
 
     private func updateMetrics() {
@@ -178,13 +194,15 @@ final class KeyboardViewController: UIInputViewController {
         if symbolsOn {
             for row in symbolRows {
                 keyboardStack.addArrangedSubview(makeRow(row.map { character in
-                    makeKey(
-                        title: String(character),
+                    let text = String(character)
+                    return makeKey(
+                        title: text,
                         identifier: "key_\(character)",
                         action: { [weak self] in
                             guard let self else { return }
-                            self.apply(self.model.insert(String(character)))
-                        })
+                            self.apply(self.model.insert(text))
+                        },
+                        longPressText: Self.symbolAlternates[text])
                 }))
             }
             keyboardStack.addArrangedSubview(makeSymbolBottomRow())
@@ -253,7 +271,8 @@ final class KeyboardViewController: UIInputViewController {
                 self.model.shiftTapped()
                 self.render()
             },
-            background: KeyboardPalette.functionKey)
+            background: KeyboardPalette.functionKey,
+            showsPreview: false)
         shift.accessibilityLabel = "大写"
         shiftButton = shift
 
@@ -280,7 +299,8 @@ final class KeyboardViewController: UIInputViewController {
             identifier: "key_symbols",
             action: { [weak self] in self?.toggleSymbols() },
             background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
         numbers.accessibilityLabel = "数字和符号"
 
         let punctuation = makeKey(
@@ -309,7 +329,8 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.toggleMode())
             },
-            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
+            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)),
+            showsPreview: false)
         mode.titleLabel?.numberOfLines = 2
         mode.titleLabel?.textAlignment = .center
         mode.accessibilityLabel = "切换中英文"
@@ -322,8 +343,10 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.space())
             },
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
         space.accessibilityLabel = "空格"
+        configureSpaceKey(space)
 
         let returnKey = makeKey(
             title: "换行",
@@ -357,7 +380,8 @@ final class KeyboardViewController: UIInputViewController {
             identifier: "key_letters",
             action: { [weak self] in self?.toggleSymbols() },
             background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
         letters.accessibilityLabel = "字母"
 
         let mode = makeKey(
@@ -367,7 +391,8 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.toggleMode())
             },
-            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
+            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)),
+            showsPreview: false)
         mode.titleLabel?.numberOfLines = 2
         mode.titleLabel?.textAlignment = .center
         mode.accessibilityLabel = "切换中英文"
@@ -380,8 +405,10 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.space())
             },
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
         space.accessibilityLabel = "空格"
+        configureSpaceKey(space)
 
         let delete = makeDeleteKey()
 
@@ -418,22 +445,42 @@ final class KeyboardViewController: UIInputViewController {
         background: UIColor = KeyboardPalette.key,
         font: UIFont? = nil,
         showsPreview: Bool = true,
-        previewText: String? = nil
+        previewText: String? = nil,
+        longPressText: String? = nil
     ) -> KeyButton {
         let button = KeyButton(
             title: title,
             identifier: identifier,
             font: font ?? .systemFont(ofSize: metrics.keyFontSize),
             background: background)
-        button.onTap = action
         button.showsPreview = showsPreview
         button.previewText = previewText
+        button.onTap = { [weak self, weak button] in
+            guard let self, let button else { return }
+            self.keyEvents.commit(button.eventSequence) { action() }
+        }
+        button.onCancelled = { [weak self, weak button] in
+            guard let self, let button else { return }
+            self.keyEvents.cancel(button.eventSequence)
+        }
         button.onPressChanged = { [weak self, weak button] pressed in
             guard let self, let button else { return }
             if pressed {
+                if button.queuesEvent {
+                    button.eventSequence = self.keyEvents.begin()
+                }
+                self.playKeyFeedback()
                 self.showPreview(for: button)
             } else {
                 self.hidePreview(for: button)
+            }
+        }
+        if let longPressText {
+            button.accessibilityHint = "长按输入\(longPressText)"
+            button.onLongPress = { [weak self] in
+                guard let self else { return false }
+                self.apply(self.model.insert(longPressText))
+                return true
             }
         }
         return button
@@ -447,6 +494,7 @@ final class KeyboardViewController: UIInputViewController {
             background: KeyboardPalette.functionKey,
             showsPreview: false)
         delete.accessibilityLabel = "删除"
+        delete.queuesEvent = false
         delete.triggersOnPress = true
         delete.onRepeat = { [weak self] in
             guard let self else { return }
@@ -482,6 +530,38 @@ final class KeyboardViewController: UIInputViewController {
             self.apply(.commit("\n"))
             return true
         }
+    }
+
+    private func configureSpaceKey(_ key: KeyButton) {
+        key.dragRequiresLongPress = true
+        key.dragStep = 5
+        key.dragVerticalLimit = 50
+        key.accessibilityHint = "长按拖动移动光标"
+        key.onLongPress = { [weak self] in
+            guard let self, !self.model.isComposing else { return false }
+            return true
+        }
+        key.onDrag = { [weak self] delta in
+            self?.moveCursor(by: Int(delta))
+        }
+    }
+
+    private func moveCursor(by steps: Int) {
+        guard steps != 0 else { return }
+        textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
+        playSelectionFeedback()
+    }
+
+    private func playKeyFeedback() {
+        guard hasFullAccess else { return }
+        keyFeedback.impactOccurred(intensity: 0.7)
+        keyFeedback.prepare()
+    }
+
+    private func playSelectionFeedback() {
+        guard hasFullAccess else { return }
+        selectionFeedback.selectionChanged()
+        selectionFeedback.prepare()
     }
 
     private func showPreview(for button: KeyButton) {
@@ -572,7 +652,7 @@ final class KeyboardViewController: UIInputViewController {
         case .ready:
             status = model.mode == .chinese ? "文山" : "English"
         }
-        candidateBar.setCandidates(model.candidates, status: status)
+        candidateBar.setCandidates(model.candidates, status: status, preedit: model.preedit)
     }
 
     private func updateMarkedText() {

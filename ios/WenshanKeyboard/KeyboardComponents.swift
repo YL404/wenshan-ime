@@ -1,6 +1,6 @@
 import UIKit
 
-/// 键盘尺寸。先按 iPhone 竖屏/横屏和 iPad 三档给值，后续再用实机截图校准。
+/// 键盘尺寸。iPhone 保持紧凑两档；iPad 按屏幕高度分档，浮动/分屏单独一档。
 struct KeyboardMetrics {
     let totalHeight: CGFloat
     let candidateHeight: CGFloat
@@ -9,18 +9,45 @@ struct KeyboardMetrics {
     let candidateFontSize: CGFloat
     let letterWidth: CGFloat
 
-    static func make(screen: CGSize, width: CGFloat, isPad: Bool) -> KeyboardMetrics {
+    static func make(
+        screen: CGSize,
+        width: CGFloat,
+        isPad: Bool,
+        isFloating: Bool = false
+    ) -> KeyboardMetrics {
         let landscape = screen.width > screen.height
-        let gap: CGFloat = isPad ? 6 : (landscape ? 5 : 5)
+        let gap: CGFloat = isPad ? (isFloating ? 5 : 6) : (landscape ? 5 : 5)
         let contentWidth = max(0, width - 12)
         let letterWidth = max(26, (contentWidth - 9 * gap) / 10)
         if isPad {
+            if isFloating {
+                return KeyboardMetrics(
+                    totalHeight: 255,
+                    candidateHeight: 40,
+                    gap: gap,
+                    keyFontSize: 24,
+                    candidateFontSize: 20,
+                    letterWidth: letterWidth)
+            }
+            if landscape {
+                let height: CGFloat = max(screen.width, screen.height) >= 1300
+                    ? 420
+                    : (screen.height < 850 ? 342 : 348)
+                return KeyboardMetrics(
+                    totalHeight: height,
+                    candidateHeight: 44,
+                    gap: gap,
+                    keyFontSize: 27,
+                    candidateFontSize: 22,
+                    letterWidth: letterWidth)
+            }
+            let height: CGFloat = screen.height >= 1300 ? 325 : (screen.height < 1150 ? 255 : 260)
             return KeyboardMetrics(
-                totalHeight: landscape ? 300 : 280,
+                totalHeight: height,
                 candidateHeight: 44,
                 gap: gap,
-                keyFontSize: 24,
-                candidateFontSize: 22,
+                keyFontSize: 22,
+                candidateFontSize: 20,
                 letterWidth: letterWidth)
         }
         if landscape {
@@ -56,6 +83,50 @@ enum KeyboardPalette {
     }
 }
 
+/// 按按下顺序执行按键动作。两指快速连打时，后按下的键可能先抬起；
+/// 队列会等前一个键抬起或取消后再执行，保证字符顺序和手指顺序一致。
+@MainActor
+final class KeyEventQueue {
+    private var nextSequence = 0
+    private var order: [Int] = []
+    private var pending: [Int: () -> Void] = [:]
+    private var isFlushing = false
+
+    func begin() -> Int {
+        let sequence = nextSequence
+        nextSequence += 1
+        order.append(sequence)
+        return sequence
+    }
+
+    func commit(_ sequence: Int, action: @escaping () -> Void) {
+        guard sequence >= 0 else {
+            action()
+            return
+        }
+        pending[sequence] = action
+        flush()
+    }
+
+    func cancel(_ sequence: Int) {
+        guard sequence >= 0 else { return }
+        pending[sequence] = nil
+        order.removeAll { $0 == sequence }
+        flush()
+    }
+
+    private func flush() {
+        guard !isFlushing else { return }
+        isFlushing = true
+        defer { isFlushing = false }
+        while let sequence = order.first, let action = pending[sequence] {
+            order.removeFirst()
+            pending[sequence] = nil
+            action()
+        }
+    }
+}
+
 /// 普通按键。所有触摸状态都收在这里：按下、抬起、长按、连发、横向拖动和拖出取消。
 /// VC 只接语义回调，不再给单个键挂 gesture recognizer。
 final class KeyButton: UIButton {
@@ -73,6 +144,15 @@ final class KeyButton: UIButton {
     var triggersOnPress = false
     var repeatDelay: TimeInterval = 0.45
     var repeatInterval: TimeInterval = 0.1
+    /// 空格等键要先长按激活，再拖动才生效，避免轻点空格时误移光标。
+    var dragRequiresLongPress = false
+    var dragStep: CGFloat = 10
+    /// 拖动时允许的垂直偏移；超过后不再移动光标。
+    var dragVerticalLimit: CGFloat?
+    /// 普通按键抬起后按按下顺序执行，避免两指快速连打乱序。
+    var queuesEvent = true
+    var eventSequence = -1
+    var onCancelled: (() -> Void)?
 
     private let normalBackground: UIColor
     private var active = false
@@ -81,6 +161,7 @@ final class KeyButton: UIButton {
     private var didRepeat = false
     private var isDragging = false
     private var dragStartX: CGFloat = 0
+    private var dragStartY: CGFloat = 0
     private var lastDragStep = 0
     private var longPressTimer: Timer?
     private var repeatDelayTimer: Timer?
@@ -107,13 +188,20 @@ final class KeyButton: UIButton {
     }
 
     override func removeFromSuperview() {
-        finishTracking()
+        cancelInteraction()
         super.removeFromSuperview()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { finishTracking() }
+        if window == nil { cancelInteraction() }
+    }
+
+    /// 键盘切页、收起或视图重建时调用，停掉计时器并释放队列里的按键。
+    func cancelInteraction() {
+        let hadTouch = touchActive
+        finishTracking()
+        if hadTouch { onCancelled?() }
     }
 
     override var isHighlighted: Bool {
@@ -132,7 +220,10 @@ final class KeyButton: UIButton {
         didLongPress = false
         didRepeat = false
         isDragging = false
-        dragStartX = touch.location(in: self).x
+        eventSequence = -1
+        let location = touch.location(in: self)
+        dragStartX = location.x
+        dragStartY = location.y
         lastDragStep = 0
         onPressChanged?(true)
         if triggersOnPress {
@@ -146,15 +237,19 @@ final class KeyButton: UIButton {
     override func continueTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
         let result = super.continueTracking(touch, with: event)
         guard touchActive, let onDrag else { return result }
+        if dragRequiresLongPress && !didLongPress { return result }
 
-        let dx = touch.location(in: self).x - dragStartX
-        guard abs(dx) >= 10 else { return result }
+        let location = touch.location(in: self)
+        let dx = location.x - dragStartX
+        let dy = location.y - dragStartY
+        if let dragVerticalLimit, abs(dy) > dragVerticalLimit { return result }
+        guard abs(dx) >= dragStep else { return result }
         if !isDragging {
             isDragging = true
             didRepeat = true
             cancelRepeatTimers()
         }
-        let step = Int(dx / 10)
+        let step = Int(dx / dragStep)
         guard step != lastDragStep else { return result }
         onDrag(CGFloat(step - lastDragStep))
         lastDragStep = step
@@ -168,12 +263,17 @@ final class KeyButton: UIButton {
         let shouldTap = inside && !didLongPress && !didRepeat
         finishTracking()
         super.endTracking(touch, with: event)
-        if shouldTap { onTap?() }
+        if shouldTap {
+            onTap?()
+        } else {
+            onCancelled?()
+        }
     }
 
     override func cancelTracking(with event: UIEvent?) {
         finishTracking()
         super.cancelTracking(with: event)
+        onCancelled?()
     }
 
     private func updateBackground() {
@@ -346,8 +446,11 @@ final class CandidateBar: UIView {
         nextButton.addAction(UIAction { [weak self] _ in self?.onPage?(1) }, for: .touchUpInside)
         dismissButton.addAction(UIAction { [weak self] _ in self?.onDismiss?() }, for: .touchUpInside)
 
-        statusLabel.font = .systemFont(ofSize: 14)
+        statusLabel.font = .systemFont(ofSize: 13)
         statusLabel.textColor = .secondaryLabel
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.adjustsFontSizeToFitWidth = true
+        statusLabel.minimumScaleFactor = 0.7
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.accessibilityIdentifier = "candidate_status"
 
@@ -387,14 +490,14 @@ final class CandidateBar: UIView {
             nextButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             nextButton.widthAnchor.constraint(equalToConstant: 22),
 
-            collectionView.leadingAnchor.constraint(equalTo: prevButton.trailingAnchor),
+            statusLabel.leadingAnchor.constraint(equalTo: prevButton.trailingAnchor, constant: 4),
+            statusLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusLabel.widthAnchor.constraint(equalToConstant: 60),
+
+            collectionView.leadingAnchor.constraint(equalTo: statusLabel.trailingAnchor, constant: 4),
             collectionView.trailingAnchor.constraint(equalTo: nextButton.leadingAnchor),
             collectionView.topAnchor.constraint(equalTo: topAnchor),
             collectionView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            statusLabel.leadingAnchor.constraint(equalTo: collectionView.leadingAnchor, constant: 6),
-            statusLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: collectionView.trailingAnchor),
         ])
 
         setCandidates([], status: "文山")
@@ -404,11 +507,12 @@ final class CandidateBar: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func setCandidates(_ candidates: [String], status: String?) {
+    func setCandidates(_ candidates: [String], status: String?, preedit: String = "") {
         let changed = candidates != self.candidates
         self.candidates = candidates
-        statusLabel.text = status
-        statusLabel.isHidden = !candidates.isEmpty
+        statusLabel.text = preedit.isEmpty ? status : preedit
+        statusLabel.textColor = preedit.isEmpty ? .secondaryLabel : .label
+        statusLabel.accessibilityLabel = preedit.isEmpty ? status : "编码 \(preedit)"
         collectionView.isHidden = candidates.isEmpty
         prevButton.isHidden = candidates.isEmpty
         nextButton.isHidden = candidates.isEmpty
