@@ -17,7 +17,7 @@ Go 内核 + Swift 6 键盘扩展。和 macOS 共用 `engine/`，iOS 只负责键
 - `WenshanKeyboard/`：键盘扩展。
   - `WenshanBridge.swift`：gomobile 桥的 Swift 门面。
   - `KeyboardModel.swift`：`@MainActor` 输入状态机（引擎、组合、候选、中英、Shift）。
-  - `KeyboardComponents.swift`：尺寸、按键、可复用候选条。
+  - `KeyboardComponents.swift`：尺寸、按键、可复用候选条；iOS 26 关闭候选条的 scroll edge effect，否则整行文字会被边缘模糊盖住。
   - `KeyboardViewController.swift`：生命周期、布局、系统输入上下文、渲染。
 - `WenshanUITests/`：宿主 App 冒烟测试。
 - `project.yml`：XcodeGen 工程定义；`.xcodeproj` 和 Info.plist 是生成物，不入库。
