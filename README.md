@@ -1,3 +1,5 @@
+<img src="assets/icon.png" width="128" align="right" alt="文山输入法图标">
+
 # 文山输入法
 
 macOS 上的双拼输入法，键位为自然码。纯 Go 实现，无 cgo，也不依赖 librime 之类的
@@ -108,4 +110,4 @@ sh scripts/repair.sh
 ## 许可
 
 词表来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），因此本项目整体以
-GPL-3.0 发布，词表版权归 rime-ice 作者所有。
+GPL-3.0 发布，词表版权归 rime-ice 作者所有。完整许可证文本见 [LICENSE](LICENSE)。
