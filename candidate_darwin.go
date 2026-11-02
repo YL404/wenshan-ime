@@ -64,6 +64,11 @@ var (
 	selSelectedContentBG        = objc.RegisterName("selectedContentBackgroundColor")
 	selClearColor               = objc.RegisterName("clearColor")
 	selSystemFontOfSize         = objc.RegisterName("systemFontOfSize:")
+	selArrayWithCapacity        = objc.RegisterName("arrayWithCapacity:")
+	selAddObject                = objc.RegisterName("addObject:")
+	selEffectiveAppearance      = objc.RegisterName("effectiveAppearance")
+	selBestMatch                = objc.RegisterName("bestMatchFromAppearancesWithNames:")
+	selIsEqualToString          = objc.RegisterName("isEqualToString:")
 )
 
 const (
@@ -91,7 +96,8 @@ type candWindow struct {
 	// 不 retain 的话事件循环一结束就成了野指针。
 	font  objc.ID
 	white objc.ID
-	dim   objc.ID
+	dim   objc.ID // 未选中文字：深色面板配浅灰字
+	dimLt objc.ID // 未选中文字：浅色面板配深灰字
 
 	// 量文字宽度用的属性字典，只建一次。
 	attrs objc.ID
@@ -99,13 +105,17 @@ type candWindow struct {
 	// NSColor.CGColor 返回的只是借用：动态语义色（selectedContentBackgroundColor）
 	// 的 CGColor 由 autorelease pool 管着，事件循环一排水就成野指针，
 	// 所以也要像 NSColor 一样显式 retain。
-	panelColor objc.ID
 	chipColor  objc.ID
 	clearColor objc.ID
 
-	panelBG objc.ID // CGColor
-	chipBG  objc.ID // CGColor
-	clearBG objc.ID // CGColor
+	panelBGDark objc.ID // CGColor：深色面板底
+	panelBGLt   objc.ID // CGColor：浅色面板底
+	chipBG      objc.ID // CGColor
+	clearBG     objc.ID // CGColor
+
+	// 查系统当前深浅用的缓存：候选外观名数组 + 深色名。
+	appearances objc.ID
+	darkName    objc.ID
 
 	shown bool
 	hud   bool
@@ -133,17 +143,30 @@ func (c *candWindow) ensure() bool {
 
 	c.font = keep(send(objc.ID(objc.GetClass("NSFont")), selSystemFontOfSize, candFontSize))
 	c.white = keep(send(objc.ID(objc.GetClass("NSColor")), selWhiteColor))
+	// 未选中文字备深浅两套：深色面板配浅灰字，浅色面板配深灰字。
 	c.dim = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.82, 1.0))
-	c.panelColor = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.12, 0.97))
+	c.dimLt = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.15, 1.0))
+	// 面板底也备深浅两套：深色是 HUD 风，浅色接近系统候选条的白底。
+	darkPanel := send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.12, 0.97)
+	lightPanel := send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.98, 0.97)
 	// 高亮用系统自带的选中色，和系统外观、强调色保持一致。
 	c.chipColor = keep(send(objc.ID(objc.GetClass("NSColor")), selSelectedContentBG))
 	if c.chipColor == 0 {
 		c.chipColor = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedRed, 0.20, 0.45, 0.85, 1.0))
 	}
 	c.clearColor = keep(send(objc.ID(objc.GetClass("NSColor")), selClearColor))
-	c.panelBG = keep(send(c.panelColor, selCGColor))
+	c.panelBGDark = keep(send(darkPanel, selCGColor))
+	c.panelBGLt = keep(send(lightPanel, selCGColor))
 	c.chipBG = keep(send(c.chipColor, selCGColor))
 	c.clearBG = keep(send(c.clearColor, selCGColor))
+	// 外观名数组缓存下来，绘制时查系统当前深浅（「自动」外观也能拿到当时的实际值）。
+	c.darkName = keep(nsString("NSAppearanceNameDarkAqua"))
+	aqua := nsString("NSAppearanceNameAqua")
+	names := send(objc.ID(objc.GetClass("NSMutableArray")), selArrayWithCapacity, 2)
+	send(names, selAddObject, aqua)
+	send(names, selAddObject, c.darkName)
+	send(aqua, selRelease)
+	c.appearances = keep(names)
 	// 圆角只裁内容图层自己，裁不掉窗口的背景色；窗口默认背景接近白色，
 	// 会从四个圆角缺口露出来，所以窗口背景必须设成透明。
 	send(panel, selSetBackgroundColor, c.clearColor)
@@ -158,7 +181,7 @@ func (c *candWindow) ensure() bool {
 	layer := send(content, selLayer)
 	send(layer, selSetCornerRadius, candRadius)
 	send(layer, selSetMasksToBounds, true)
-	send(layer, selSetBackgroundColor, c.panelBG)
+	send(layer, selSetBackgroundColor, c.panelBGDark)
 	send(panel, selSetContentView, content)
 
 	for i := range c.chips {
@@ -218,8 +241,32 @@ func (c *candWindow) showText(text string, caret NSRect) {
 	c.layout([]string{text}, -1, caret)
 }
 
+// lightAppearance 判断系统当前是不是浅色外观。按 NSApp.effectiveAppearance
+// 解析，「自动」外观也能拿到当时的实际深浅；查不到（NSApp 未起等）返回
+// false，维持原来的深色 HUD。
+func (c *candWindow) lightAppearance() bool {
+	app := send(objc.ID(objc.GetClass("NSApplication")), selSharedApplication)
+	if app == 0 || c.appearances == 0 {
+		return false
+	}
+	eff := send(app, selEffectiveAppearance)
+	if eff == 0 {
+		return false
+	}
+	best := send(eff, selBestMatch, c.appearances)
+	return best != 0 && send(best, selIsEqualToString, c.darkName) == 0
+}
+
 // layout 依次排好色块，再按内容调整面板大小和位置。
 func (c *candWindow) layout(items []string, selected int, caret NSRect) {
+	// 每次绘制都按系统当前深浅选一遍配色：面板开着时用户切深浅模式，
+	// 下一次出候选就跟着变了，不用额外监听通知。
+	panelBG, dimText := c.panelBGDark, c.dim
+	if c.lightAppearance() {
+		panelBG, dimText = c.panelBGLt, c.dimLt
+	}
+	send(send(c.content, selLayer), selSetBackgroundColor, panelBG)
+
 	x, maxH := candOuter, 0.0
 	for i := range c.chips {
 		bg, chip := c.bg[i], c.chips[i]
@@ -245,7 +292,7 @@ func (c *candWindow) layout(items []string, selected int, caret NSRect) {
 			send(chip, selSetTextColor, c.white)
 			send(bgLayer, selSetBackgroundColor, c.chipBG)
 		} else {
-			send(chip, selSetTextColor, c.dim)
+			send(chip, selSetTextColor, dimText)
 			send(bgLayer, selSetBackgroundColor, c.clearBG)
 		}
 
