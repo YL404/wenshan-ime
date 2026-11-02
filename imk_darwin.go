@@ -165,6 +165,13 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 			return true
 		}
 	}
+	// [ / ] 取当前候选的首字 / 尾字，编码消耗和正常选词一样。
+	if len(eng.Buffer()) > 0 && (ch == '[' || ch == ']') {
+		if text, ok := eng.SelectChar(0, ch == ']'); ok {
+			commit(client, text)
+			return true
+		}
+	}
 	if ch >= 'a' && ch <= 'z' {
 		if eng.Type(ch) {
 			applyPreedit(client)

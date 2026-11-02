@@ -56,6 +56,7 @@ func main() {
 	eng = engine.New(dict)
 	eng.SetFreq(engine.LoadFreq(freqPath()))
 	eng.SetUserDict(engine.LoadUserDict(userDictPath()))
+	eng.SetPhrases(engine.LoadUserDict(phrasesPath()))
 
 	app := send(objc.ID(objc.GetClass("NSApplication")), selSharedApplication)
 	if app == 0 {
@@ -135,6 +136,15 @@ func userDictPath() string {
 		return "userdict.tsv"
 	}
 	return filepath.Join(home, "Library", "Application Support", "Wenshan", "userdict.tsv")
+}
+
+// phrasesPath 是自定义短语文件的位置。格式同 userdict.tsv，但只读。
+func phrasesPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "phrases.tsv"
+	}
+	return filepath.Join(home, "Library", "Application Support", "Wenshan", "phrases.tsv")
 }
 
 // openLog 把日志写到 ~/Library/Logs/Wenshan.log：系统启动输入法时没有终端，

@@ -23,7 +23,8 @@ type userEntry struct {
 	text string
 }
 
-// LoadUserDict 读取自造词文件。文件不存在时返回空表。
+// LoadUserDict 读取自造词或短语文件。文件不存在时返回空表。
+// 每行是「编码<TAB>文本」，空行和 # 开头的行忽略。
 func LoadUserDict(path string) *UserDict {
 	u := &UserDict{path: path}
 	file, err := os.Open(path)
@@ -34,7 +35,11 @@ func LoadUserDict(path string) *UserDict {
 
 	sc := bufio.NewScanner(file)
 	for sc.Scan() {
-		code, text, ok := strings.Cut(sc.Text(), "\t")
+		line := strings.TrimSuffix(sc.Text(), "\r")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		code, text, ok := strings.Cut(line, "\t")
 		if !ok || code == "" || text == "" {
 			continue
 		}

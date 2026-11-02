@@ -10,11 +10,12 @@ const maxCandidates = 9
 
 // Engine 持有一次输入过程的全部状态。它只在主线程上被调用，不加锁。
 type Engine struct {
-	dict  *Dict
-	freq  *Freq
-	user  *UserDict
-	buf   []byte
-	cands []Candidate
+	dict    *Dict
+	freq    *Freq
+	user    *UserDict
+	phrases *UserDict
+	buf     []byte
+	cands   []Candidate
 
 	// 自造词的学习状态：本次组合输入过的全部按键、连续单字选出来的文字。
 	session      []byte
@@ -34,6 +35,9 @@ func (e *Engine) SetFreq(f *Freq) { e.freq = f }
 
 // SetUserDict 挂上自造词表。
 func (e *Engine) SetUserDict(u *UserDict) { e.user = u }
+
+// SetPhrases 挂上只读的自定义短语表。它和自造词共用格式，但不会被写回。
+func (e *Engine) SetPhrases(p *UserDict) { e.phrases = p }
 
 // SaveUser 把新学的自造词写回磁盘。
 func (e *Engine) SaveUser() error {
@@ -103,23 +107,50 @@ func (e *Engine) Reset() {
 // Select 取出第 i 个候选并把它占用的编码从缓冲里去掉，返回上屏文本。
 // 剩余缓冲会重新查词，所以可以连续选词。
 func (e *Engine) Select(i int) (string, bool) {
+	return e.selectCandidate(i, nil)
+}
+
+// SelectChar 取出第 i 个候选的首字或尾字。编码消耗和 Select 一样：
+// 词还没打完时也把整个缓冲消耗掉，避免残留半截编码。
+func (e *Engine) SelectChar(i int, last bool) (string, bool) {
+	return e.selectCandidate(i, func(text string) string {
+		runes := []rune(text)
+		if len(runes) == 0 {
+			return ""
+		}
+		if last {
+			return string(runes[len(runes)-1])
+		}
+		return string(runes[0])
+	})
+}
+
+// selectCandidate 是 Select 和 SelectChar 的共同路径。pick 为 nil 时上屏整段候选。
+func (e *Engine) selectCandidate(i int, pick func(string) string) (string, bool) {
 	if i < 0 || i >= len(e.cands) {
 		return "", false
 	}
 	c := e.cands[i]
+	text := c.Text
+	if pick != nil {
+		text = pick(text)
+		if text == "" {
+			return "", false
+		}
+	}
 	// 候选的编码可能比缓冲长（词还没打全，例如 wofax 选「我发现」），
 	// 这种情况把缓冲整个消耗掉即可。
 	used := c.CodeLen
 	if used > len(e.buf) {
 		used = len(e.buf)
 	}
-	if e.freq != nil && e.freq.Bump(c.Text) {
+	if e.freq != nil && e.freq.Bump(text) {
 		e.needSave = true
 	}
 	// 连续单字选词说明词库里没有这个词，组合结束后记成自造词。
 	if c.CodeLen == 2 {
 		e.singles++
-		e.picked = append(e.picked, c.Text...)
+		e.picked = append(e.picked, text...)
 	} else {
 		e.singles, e.picked = 0, e.picked[:0]
 	}
@@ -133,7 +164,7 @@ func (e *Engine) Select(i int) (string, bool) {
 		e.session, e.picked, e.singles = e.session[:0], e.picked[:0], 0
 	}
 	e.refresh()
-	return c.Text, true
+	return text, true
 }
 
 // refresh 重新计算候选。一个音节两个键，所以至少两键才有意义。
@@ -186,6 +217,9 @@ func (e *Engine) collect(buf []byte) {
 		for _, c := range e.dict.Compose(buf, maxCandidates) {
 			e.cands = insertCandidate(e.cands, c, maxCandidates)
 		}
+	}
+	if e.phrases != nil {
+		e.cands = mergeCandidates(e.cands, e.phrases.Lookup(buf, maxCandidates), maxCandidates)
 	}
 	if e.user != nil {
 		e.cands = mergeCandidates(e.cands, e.user.Lookup(buf, maxCandidates), maxCandidates)

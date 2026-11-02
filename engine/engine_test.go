@@ -2,6 +2,8 @@ package engine
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -214,6 +216,50 @@ func findText(t *testing.T, e *Engine, text string) int {
 	return -1
 }
 
+// 以词定字：取候选首/尾字，编码消耗和正常选词一致。
+func TestSelectChar(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "ni", Text: "你", Weight: 500},
+		{Code: "hk", Text: "好", Weight: 400},
+		{Code: "nihk", Text: "你好", Weight: 900},
+	})
+	e := New(d)
+	typeCode := func(s string) {
+		e.Reset()
+		for _, ch := range []byte(s) {
+			e.Type(ch)
+		}
+	}
+
+	typeCode("nihk")
+	if got := e.Candidates(); len(got) == 0 || got[0].Text != "你好" {
+		t.Fatalf("候选 = %v", got)
+	}
+	if text, ok := e.SelectChar(0, false); !ok || text != "你" {
+		t.Fatalf("取首字 = %q, %v", text, ok)
+	}
+	if len(e.Buffer()) != 0 {
+		t.Fatalf("取首字后缓冲 = %q", e.Buffer())
+	}
+
+	typeCode("nihk")
+	if text, ok := e.SelectChar(0, true); !ok || text != "好" {
+		t.Fatalf("取尾字 = %q, %v", text, ok)
+	}
+
+	// 从候选里取单字时，剩下的编码继续组成后面的词。
+	typeCode("nihk")
+	if text, ok := e.SelectChar(findText(t, e, "你"), false); !ok || text != "你" {
+		t.Fatalf("取候选里的你 = %q, %v", text, ok)
+	}
+	if string(e.Buffer()) != "hk" {
+		t.Fatalf("剩余缓冲 = %q, 期望 hk", e.Buffer())
+	}
+	if got := e.Candidates(); len(got) == 0 || got[0].Text != "好" {
+		t.Fatalf("剩余候选 = %v", got)
+	}
+}
+
 // 缓冲比候选编码短时（词还没打完），选中后缓冲应整个清空。
 func TestSelectLongerCandidate(t *testing.T) {
 	d := buildDict(t, []Entry{{Code: "wofaxm", Text: "我发现", Weight: 900}})
@@ -418,6 +464,39 @@ func TestUserDictLearn(t *testing.T) {
 	e2.Select(findText(t, e2, "好"))
 	if u2.Len() != 1 {
 		t.Fatalf("单字组合也应记下: %d", u2.Len())
+	}
+}
+
+// 短语文件按「编码<TAB>文本」读入，空行和注释忽略。
+func TestLoadPhrases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "phrases.tsv")
+	if err := os.WriteFile(path, []byte("# 注释\r\n\r\nyx\tme@example.com\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := LoadUserDict(path)
+	if p.Len() != 1 {
+		t.Fatalf("短语条数 = %d, 期望 1", p.Len())
+	}
+	got := p.Lookup([]byte("yx"), 9)
+	if len(got) != 1 || got[0].Text != "me@example.com" {
+		t.Fatalf("Lookup(yx) = %v", got)
+	}
+}
+
+// 自定义短语和普通词同码时，短语要排在最前。
+func TestPhrasesRanking(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "yx", Text: "邮箱", Weight: 900000},
+		{Code: "yx", Text: "有些", Weight: 800000},
+	})
+	p := &UserDict{entries: []userEntry{{code: "yx", text: "me@example.com"}}}
+	e := New(d)
+	e.SetPhrases(p)
+	e.Type('y')
+	e.Type('x')
+	got := e.Candidates()
+	if len(got) == 0 || got[0].Text != "me@example.com" {
+		t.Fatalf("候选 = %v", got)
 	}
 }
 
