@@ -49,6 +49,11 @@ final class KeyboardModel {
 
     var isComposing: Bool { !preedit.isEmpty }
 
+    /// 非默认回车键（发送/搜索/完成等）用蓝色强调。
+    var isReturnKeyProminent: Bool {
+        !isComposing && returnKeyType != .default
+    }
+
     /// 回车键标题：组合态显示“确认”，其余跟宿主输入框的 returnKeyType 走。
     var returnKeyTitle: String {
         if isComposing {
@@ -98,7 +103,9 @@ final class KeyboardModel {
             return direct(key)
         }
         if mode == .english {
-            return apply(WenshanBridge.direct(shift.isActive ? key.uppercased() : key))
+            let text = shift.isActive ? key.uppercased() : key
+            if shift == .once { shift = .off }
+            return apply(WenshanBridge.direct(text))
         }
         if shift.isActive {
             let outcome = WenshanBridge.shiftLetter(key)

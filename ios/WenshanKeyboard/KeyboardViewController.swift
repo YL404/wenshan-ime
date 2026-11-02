@@ -9,15 +9,16 @@ final class KeyboardViewController: UIInputViewController {
     private let candidateBar = CandidateBar()
     private let keyboardStack = UIStackView()
     private let root = UIStackView()
+    private let keyPreview = KeyPreviewView()
     private var heightConstraint: NSLayoutConstraint!
     private var candidateHeightConstraint: NSLayoutConstraint!
-    private var metrics = KeyboardMetrics.make(screen: .zero, isPad: false)
+    private var metrics = KeyboardMetrics.make(screen: .zero, width: 0, isPad: false)
 
     private var shiftButton: KeyButton?
     private var modeButton: KeyButton?
     private var returnButton: KeyButton?
     private var punctuationButton: KeyButton?
-    private var punctuationLongPressUsed = false
+    private weak var previewedButton: KeyButton?
     private var symbolsOn = false
     private var hasMarkedText = false
     private var isApplyingText = false
@@ -48,6 +49,7 @@ final class KeyboardViewController: UIInputViewController {
         model.flush()
         model.reset()
         clearMarkedText()
+        hidePreview()
         candidateBar.setCandidates([], status: nil)
     }
     /// 外部改正文：只在组合态重置，避免每次选词都误清状态。
@@ -124,6 +126,7 @@ final class KeyboardViewController: UIInputViewController {
         root.addArrangedSubview(candidateBar)
         root.addArrangedSubview(keyboardStack)
         view.addSubview(root)
+        view.addSubview(keyPreview)
 
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
@@ -137,8 +140,10 @@ final class KeyboardViewController: UIInputViewController {
 
     private func currentMetrics() -> KeyboardMetrics {
         let screen = view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
+        let width = view.bounds.width > 0 ? view.bounds.width : screen.width
         return KeyboardMetrics.make(
             screen: screen,
+            width: width,
             isPad: traitCollection.userInterfaceIdiom == .pad)
     }
 
@@ -168,7 +173,7 @@ final class KeyboardViewController: UIInputViewController {
         modeButton = nil
         returnButton = nil
         punctuationButton = nil
-        punctuationLongPressUsed = false
+        hidePreview()
 
         if symbolsOn {
             for row in symbolRows {
@@ -263,15 +268,7 @@ final class KeyboardViewController: UIInputViewController {
         }
         let lettersRow = makeRow(letters)
 
-        let delete = makeKey(
-            title: "⌫",
-            identifier: "key_delete",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.backspace())
-            },
-            background: KeyboardPalette.functionKey)
-        delete.accessibilityLabel = "删除"
+        let delete = makeDeleteKey()
 
         let sideWidth = metrics.letterWidth * 1.3
         return makeProportionalRow([(shift, sideWidth), (lettersRow, nil), (delete, sideWidth)])
@@ -291,18 +288,18 @@ final class KeyboardViewController: UIInputViewController {
             identifier: "key_punctuation",
             action: { [weak self] in
                 guard let self else { return }
-                if self.punctuationLongPressUsed {
-                    self.punctuationLongPressUsed = false
-                    return
-                }
                 self.apply(self.model.punctuate("."))
             },
-            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
+            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)),
+            previewText: "。")
         punctuation.titleLabel?.numberOfLines = 2
         punctuation.titleLabel?.textAlignment = .center
         punctuation.accessibilityLabel = "句号，长按逗号"
-        punctuation.addGestureRecognizer(UILongPressGestureRecognizer(
-            target: self, action: #selector(handlePunctuationLongPress(_:))))
+        punctuation.onLongPress = { [weak self] in
+            guard let self else { return false }
+            self.apply(self.model.punctuate(","))
+            return true
+        }
         punctuationButton = punctuation
 
         let mode = makeKey(
@@ -336,13 +333,17 @@ final class KeyboardViewController: UIInputViewController {
                 self.apply(self.model.returnKey())
             },
             background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
         returnKey.accessibilityLabel = "换行"
+        configureReturnKey(returnKey)
         returnButton = returnKey
 
+        let globe = makeGlobeKey()
         let unit = metrics.letterWidth
         return makeProportionalRow([
             (numbers, unit * 1.15),
+            (globe, unit * 0.75),
             (punctuation, unit * 0.65),
             (space, nil),
             (mode, unit),
@@ -382,15 +383,7 @@ final class KeyboardViewController: UIInputViewController {
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         space.accessibilityLabel = "空格"
 
-        let delete = makeKey(
-            title: "⌫",
-            identifier: "key_delete",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.backspace())
-            },
-            background: KeyboardPalette.functionKey)
-        delete.accessibilityLabel = "删除"
+        let delete = makeDeleteKey()
 
         let returnKey = makeKey(
             title: "换行",
@@ -400,13 +393,17 @@ final class KeyboardViewController: UIInputViewController {
                 self.apply(self.model.returnKey())
             },
             background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
         returnKey.accessibilityLabel = "换行"
+        configureReturnKey(returnKey)
         returnButton = returnKey
 
+        let globe = makeGlobeKey()
         let unit = metrics.letterWidth
         return makeProportionalRow([
             (letters, unit * 1.15),
+            (globe, unit * 0.75),
             (mode, unit),
             (space, nil),
             (delete, unit),
@@ -419,15 +416,104 @@ final class KeyboardViewController: UIInputViewController {
         identifier: String,
         action: @escaping () -> Void,
         background: UIColor = KeyboardPalette.key,
-        font: UIFont? = nil
+        font: UIFont? = nil,
+        showsPreview: Bool = true,
+        previewText: String? = nil
     ) -> KeyButton {
         let button = KeyButton(
             title: title,
             identifier: identifier,
             font: font ?? .systemFont(ofSize: metrics.keyFontSize),
             background: background)
-        button.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        button.onTap = action
+        button.showsPreview = showsPreview
+        button.previewText = previewText
+        button.onPressChanged = { [weak self, weak button] pressed in
+            guard let self, let button else { return }
+            if pressed {
+                self.showPreview(for: button)
+            } else {
+                self.hidePreview(for: button)
+            }
+        }
         return button
+    }
+
+    private func makeDeleteKey() -> KeyButton {
+        let delete = makeKey(
+            title: "⌫",
+            identifier: "key_delete",
+            action: {},
+            background: KeyboardPalette.functionKey,
+            showsPreview: false)
+        delete.accessibilityLabel = "删除"
+        delete.triggersOnPress = true
+        delete.onRepeat = { [weak self] in
+            guard let self else { return }
+            self.apply(self.model.backspace())
+        }
+        delete.onDrag = { [weak self] delta in
+            self?.deleteByDrag(delta)
+        }
+        return delete
+    }
+
+    private func makeGlobeKey() -> KeyButton {
+        let globe = makeKey(
+            title: "",
+            identifier: "key_globe",
+            action: { [weak self] in self?.advanceToNextInputMode() },
+            background: KeyboardPalette.functionKey,
+            showsPreview: false)
+        let symbol = UIImage.SymbolConfiguration(
+            pointSize: metrics.keyFontSize,
+            weight: .regular)
+        globe.setImage(UIImage(systemName: "globe", withConfiguration: symbol), for: .normal)
+        globe.tintColor = .label
+        globe.accessibilityLabel = "切换键盘"
+        return globe
+    }
+
+    private func configureReturnKey(_ key: KeyButton) {
+        key.onLongPress = { [weak self] in
+            guard let self, !self.model.isComposing, self.model.returnKeyType != .default else {
+                return false
+            }
+            self.apply(.commit("\n"))
+            return true
+        }
+    }
+
+    private func showPreview(for button: KeyButton) {
+        guard button.showsPreview, !button.isHidden else { return }
+        let text = button.previewText ?? button.title(for: .normal) ?? ""
+        guard !text.isEmpty else { return }
+        let frame = button.convert(button.bounds, to: view)
+        previewedButton = button
+        keyPreview.show(
+            text: text,
+            keyFrame: frame,
+            font: .systemFont(ofSize: metrics.keyFontSize + 4),
+            in: view)
+    }
+
+    private func hidePreview(for button: KeyButton? = nil) {
+        guard button == nil || previewedButton === button else { return }
+        previewedButton = nil
+        keyPreview.hide()
+    }
+
+    private func deleteByDrag(_ delta: CGFloat) {
+        guard delta < 0 else { return }
+        delete(times: Int(-delta))
+    }
+
+    private func delete(times: Int) {
+        guard times > 0 else { return }
+        for _ in 0..<times {
+            apply(model.backspace(), renderNow: false)
+        }
+        render()
     }
 
     // MARK: - 引擎和上下文
@@ -516,17 +602,10 @@ final class KeyboardViewController: UIInputViewController {
         shiftButton?.setActive(model.shift.isActive)
         modeButton?.setActive(model.mode == .english)
         punctuationButton?.setTitle(model.mode == .chinese ? "。\n，" : ".\n,", for: .normal)
+        punctuationButton?.previewText = model.mode == .chinese ? "。" : "."
         returnButton?.setTitle(model.returnKeyTitle, for: .normal)
         returnButton?.accessibilityLabel = model.returnKeyTitle
-    }
-
-    @objc private func handlePunctuationLongPress(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else {
-            if gesture.state == .ended { punctuationLongPressUsed = false }
-            return
-        }
-        punctuationLongPressUsed = true
-        apply(model.punctuate(","))
+        returnButton?.setActive(model.isReturnKeyProminent)
     }
 
     private func toggleSymbols() {
@@ -535,7 +614,7 @@ final class KeyboardViewController: UIInputViewController {
         render()
     }
 
-    private func apply(_ outcome: KeyboardOutcome) {
+    private func apply(_ outcome: KeyboardOutcome, renderNow: Bool = true) {
         switch outcome {
         case .commit(let text):
             isApplyingText = true
@@ -554,6 +633,6 @@ final class KeyboardViewController: UIInputViewController {
         case .handled, .idle:
             break
         }
-        render()
+        if renderNow { render() }
     }
 }

@@ -9,10 +9,10 @@ struct KeyboardMetrics {
     let candidateFontSize: CGFloat
     let letterWidth: CGFloat
 
-    static func make(screen: CGSize, isPad: Bool) -> KeyboardMetrics {
+    static func make(screen: CGSize, width: CGFloat, isPad: Bool) -> KeyboardMetrics {
         let landscape = screen.width > screen.height
         let gap: CGFloat = isPad ? 6 : (landscape ? 5 : 5)
-        let contentWidth = max(0, screen.width - 12)
+        let contentWidth = max(0, width - 12)
         let letterWidth = max(26, (contentWidth - 9 * gap) / 10)
         if isPad {
             return KeyboardMetrics(
@@ -56,10 +56,35 @@ enum KeyboardPalette {
     }
 }
 
-/// 普通按键。按下时改变背景色，Shift/中英键可切成蓝色激活态。
+/// 普通按键。所有触摸状态都收在这里：按下、抬起、长按、连发、横向拖动和拖出取消。
+/// VC 只接语义回调，不再给单个键挂 gesture recognizer。
 final class KeyButton: UIButton {
+    var onTap: (() -> Void)?
+    /// 返回 true 表示这次长按已被消费，抬起时不再触发 onTap。
+    var onLongPress: (() -> Bool)?
+    var onRepeat: (() -> Void)?
+    /// 横向拖动步长，正数向右，负数向左。
+    var onDrag: ((CGFloat) -> Void)?
+    var onPressChanged: ((Bool) -> Void)?
+
+    var showsPreview = true
+    var previewText: String?
+    /// 删除键按下即生效，不等抬起。
+    var triggersOnPress = false
+    var repeatDelay: TimeInterval = 0.45
+    var repeatInterval: TimeInterval = 0.1
+
     private let normalBackground: UIColor
     private var active = false
+    private var touchActive = false
+    private var didLongPress = false
+    private var didRepeat = false
+    private var isDragging = false
+    private var dragStartX: CGFloat = 0
+    private var lastDragStep = 0
+    private var longPressTimer: Timer?
+    private var repeatDelayTimer: Timer?
+    private var repeatTimer: Timer?
 
     init(title: String, identifier: String, font: UIFont, background: UIColor = KeyboardPalette.key) {
         normalBackground = background
@@ -81,16 +106,200 @@ final class KeyButton: UIButton {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func removeFromSuperview() {
+        finishTracking()
+        super.removeFromSuperview()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { finishTracking() }
+    }
+
     override var isHighlighted: Bool {
-        didSet {
-            backgroundColor = isHighlighted ? KeyboardPalette.pressed : (active ? .systemBlue : normalBackground)
-        }
+        didSet { updateBackground() }
     }
 
     func setActive(_ active: Bool) {
         self.active = active
-        backgroundColor = active ? .systemBlue : normalBackground
+        updateBackground()
         setTitleColor(active ? .white : .label, for: .normal)
+    }
+
+    override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        guard super.beginTracking(touch, with: event) else { return false }
+        touchActive = true
+        didLongPress = false
+        didRepeat = false
+        isDragging = false
+        dragStartX = touch.location(in: self).x
+        lastDragStep = 0
+        onPressChanged?(true)
+        if triggersOnPress {
+            didRepeat = true
+            onRepeat?()
+        }
+        startTimers()
+        return true
+    }
+
+    override func continueTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        let result = super.continueTracking(touch, with: event)
+        guard touchActive, let onDrag else { return result }
+
+        let dx = touch.location(in: self).x - dragStartX
+        guard abs(dx) >= 10 else { return result }
+        if !isDragging {
+            isDragging = true
+            didRepeat = true
+            cancelRepeatTimers()
+        }
+        let step = Int(dx / 10)
+        guard step != lastDragStep else { return result }
+        onDrag(CGFloat(step - lastDragStep))
+        lastDragStep = step
+        return result
+    }
+
+    override func endTracking(_ touch: UITouch?, with event: UIEvent?) {
+        let inside = touch.map {
+            bounds.insetBy(dx: -10, dy: -10).contains($0.location(in: self))
+        } ?? false
+        let shouldTap = inside && !didLongPress && !didRepeat
+        finishTracking()
+        super.endTracking(touch, with: event)
+        if shouldTap { onTap?() }
+    }
+
+    override func cancelTracking(with event: UIEvent?) {
+        finishTracking()
+        super.cancelTracking(with: event)
+    }
+
+    private func updateBackground() {
+        backgroundColor = isHighlighted ? KeyboardPalette.pressed : (active ? .systemBlue : normalBackground)
+    }
+
+    private func startTimers() {
+        cancelTimers()
+        if onLongPress != nil {
+            let timer = Timer(
+                timeInterval: 0.45,
+                target: self,
+                selector: #selector(longPressFired),
+                userInfo: nil,
+                repeats: false)
+            RunLoop.main.add(timer, forMode: .common)
+            longPressTimer = timer
+        }
+        if onRepeat != nil {
+            let timer = Timer(
+                timeInterval: repeatDelay,
+                target: self,
+                selector: #selector(repeatDelayFired),
+                userInfo: nil,
+                repeats: false)
+            RunLoop.main.add(timer, forMode: .common)
+            repeatDelayTimer = timer
+        }
+    }
+
+    private func finishTracking() {
+        touchActive = false
+        isDragging = false
+        cancelTimers()
+        onPressChanged?(false)
+    }
+
+    private func cancelTimers() {
+        longPressTimer?.invalidate()
+        longPressTimer = nil
+        cancelRepeatTimers()
+    }
+
+    private func cancelRepeatTimers() {
+        repeatDelayTimer?.invalidate()
+        repeatDelayTimer = nil
+        repeatTimer?.invalidate()
+        repeatTimer = nil
+    }
+
+    @objc private func longPressFired() {
+        guard touchActive, let onLongPress, onLongPress() else { return }
+        didLongPress = true
+        cancelRepeatTimers()
+    }
+
+    @objc private func repeatDelayFired() {
+        guard touchActive, let onRepeat else { return }
+        didRepeat = true
+        onRepeat()
+        let timer = Timer(
+            timeInterval: repeatInterval,
+            target: self,
+            selector: #selector(repeatFired),
+            userInfo: nil,
+            repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        repeatTimer = timer
+    }
+
+    @objc private func repeatFired() {
+        guard touchActive else { return }
+        onRepeat?()
+    }
+}
+
+/// 按键上方的放大预览。只做显示，不参与触摸。
+final class KeyPreviewView: UIView {
+    private let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isHidden = true
+        isUserInteractionEnabled = false
+        backgroundColor = .secondarySystemBackground
+        layer.cornerRadius = 8
+        layer.cornerCurve = .continuous
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.18
+        layer.shadowRadius = 3
+        layer.shadowOffset = CGSize(width: 0, height: 2)
+
+        label.textAlignment = .center
+        label.textColor = .label
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            label.topAnchor.constraint(equalTo: topAnchor),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func show(text: String, keyFrame: CGRect, font: UIFont, in container: UIView) {
+        label.text = text
+        label.font = font
+
+        let width = max(keyFrame.width, 44)
+        let height = keyFrame.height + 8
+        let maxX = max(4, container.bounds.width - width - 4)
+        let x = min(max(4, keyFrame.midX - width / 2), maxX)
+        var y = keyFrame.minY - height - 4
+        if y < 4 {
+            y = min(keyFrame.maxY + 4, container.bounds.height - height - 4)
+        }
+        frame = CGRect(x: x, y: y, width: width, height: height)
+        isHidden = false
+    }
+
+    func hide() {
+        isHidden = true
     }
 }
 
