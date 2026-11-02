@@ -190,6 +190,16 @@ func (e *Engine) collect(buf []byte) {
 	if e.user != nil {
 		e.cands = mergeCandidates(e.cands, e.user.Lookup(buf, maxCandidates), maxCandidates)
 	}
+	// 按错一键的纠错：给纠错行留两个座位，挤掉排尾的正常候选，
+	// 不让「打错的输入恰好也是合法音节」时凑出来的候选把它挤没。
+	if corrs := e.dict.Corrections(buf, maxCandidates); len(corrs) > 0 {
+		if len(e.cands) > maxCandidates-2 {
+			e.cands = e.cands[:maxCandidates-2]
+		}
+		for _, c := range corrs {
+			e.cands = insertCandidate(e.cands, c, maxCandidates)
+		}
+	}
 }
 
 // umlautVariant 把 j/q/x/y + u 的两键组合改写成 j/q/x/y + v。

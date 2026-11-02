@@ -485,3 +485,56 @@ func TestThreeKeysKeepsPrefix(t *testing.T) {
 		}
 	}
 }
+
+// 按错一键（l 是 k 的邻键）也能打出想要的字：纠错行只补空位，不抢首位。
+func TestNeighborCorrection(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "hk", Text: "好", Weight: 900},
+	})
+	e := New(d)
+	for _, ch := range []byte("hl") {
+		e.Type(ch)
+	}
+	got := e.Candidates()
+	if len(got) == 0 || got[0].Text != "好" {
+		t.Fatalf("hl 候选 = %v", got)
+	}
+}
+
+// 词按错一键：纠错词排在字面能查到的候选之后。
+func TestCorrectionWord(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "gr", Text: "关", Weight: 500},
+		{Code: "grxi", Text: "关系", Weight: 900000},
+	})
+	e := New(d)
+	for _, ch := range []byte("grzi") {
+		e.Type(ch)
+	}
+	if got := e.Candidates(); len(got) == 0 || got[0].Text != "关" {
+		t.Fatalf("grzi 首选 = %v", got)
+	}
+	if i := findText(t, e, "关系"); i == 0 {
+		t.Fatalf("纠错词抢了首位: %v", e.Candidates())
+	}
+}
+
+// 整句按错一键：三个音节的跨度内替换一个两键组，把句子纠回来。
+func TestCorrectionSentence(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "wo", Text: "我", Weight: 900000},
+		{Code: "womfxm", Text: "我们发现", Weight: 900000},
+	})
+	e := New(d)
+	for _, ch := range []byte("womfzm") {
+		e.Type(ch)
+	}
+	// x 换成邻键 z 才是我们发现：纠错行排在正常候选之后。
+	got := e.Candidates()
+	if len(got) == 0 || got[0].Text != "我" {
+		t.Fatalf("womfzm 首选 = %v", got)
+	}
+	if i := findText(t, e, "我们发现"); i == 0 {
+		t.Fatalf("纠错句抢了首位: %v", got)
+	}
+}
