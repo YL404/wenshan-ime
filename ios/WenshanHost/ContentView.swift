@@ -30,6 +30,7 @@ struct ContentView: View {
                     Text(dataStatus)
                         .foregroundStyle(.secondary)
                     Text("词频 \(freqCount) 条 · 自造词 \(userCount) 条 · 短语 \(phraseCount) 条")
+                    Button("刷新统计") { refreshData() }
                     Button("清空学习记录", role: .destructive) {
                         showClearConfirmation = true
                     }

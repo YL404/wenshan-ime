@@ -105,8 +105,9 @@ function run([udid, developerDir]) {
 ## 内存
 
 模拟器实测（iPhone 18 Pro，iOS 27.2，Debug）：键盘扩展启动约 30 MB，
-完成一次上屏约 32 MB，收起键盘后回落到约 20 MB。词表通过 App Group 文件 mmap，
-`lsof` 确认映射的是共享容器里的 `dict.bin`，没有整块读入 Go 堆。
+完成一次上屏约 32 MB，50 次连续上屏后约 23 MB，收起键盘后回落到约 20 MB；
+没有随上屏次数线性增长。词表通过 App Group 文件 mmap，`lsof` 确认映射的是共享容器里的
+`dict.bin`，没有整块读入 Go 堆。
 
 模拟器不执行键盘扩展的 jetsam 上限。真机 Release 构建仍需用 Instruments 测冷启动、
 首次输入、100 次上屏和 10 分钟空闲；目标控制在 50 MB 以内，给系统留余量。
