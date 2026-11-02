@@ -1,10 +1,10 @@
-// Command icon 画文山输入法的图标：纸色圆角方形 + 墨山 + 朱红小印，
+// Command icon 画文山输入法的图标：纸色圆角方形 + 分层墨色山峦 + 红日 + 云带，
 // 同时输出菜单栏用的单色方块镂空图标。
 //
 //	go run ./cmd/icon -out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset
 //
-// 图形直接用扫描线填充画，不依赖任何绘图库；每档先放大四倍再降采样，
-// 这样小尺寸也有干净的边缘。
+// 图形直接用扫描线填充画，不依赖任何绘图库：山脊是二次贝塞尔采样成的多段折线，
+// 云带用半透明晕染。每档先放大四倍再降采样，小尺寸也有干净的边缘。
 package main
 
 import (
@@ -23,22 +23,14 @@ import (
 
 type point struct{ X, Y float64 }
 
-// 坐标都是 0-100 的归一化值，y 轴朝下。App 图标的圆角方形占 10-90。
 var (
-	backPeak = []point{{30, 44}, {2, 86}, {60, 86}}
-	mainPeak = []point{{55, 36}, {16, 86}, {94, 86}}
-	snowCap  = []point{{55, 36}, {69, 54}, {61, 49}, {55, 54}, {49, 49}, {41, 54}}
-	seal     = []point{{74, 15}, {83, 15}, {83, 24}, {74, 24}}
-	sealPeak = []point{{76, 22}, {78, 19.5}, {79.2, 20.8}, {80.5, 17}, {82, 22}}
-)
-
-var (
-	paper   = color.RGBA{R: 0xf3, G: 0xec, B: 0xdd, A: 0xff}
-	snow    = color.RGBA{R: 0xf8, G: 0xfb, B: 0xfd, A: 0xff}
-	ink     = color.RGBA{R: 0x1f, G: 0x2a, B: 0x36, A: 0xff}
-	inkWash = color.RGBA{R: 0x7e, G: 0x93, B: 0xa3, A: 0xff}
-	sealRed = color.RGBA{R: 0xc0, G: 0x50, B: 0x3a, A: 0xff}
-	menuInk = color.RGBA{A: 0xff}
+	paper    = color.RGBA{R: 0xf3, G: 0xec, B: 0xdd, A: 0xff}
+	ink      = color.RGBA{R: 0x1f, G: 0x2a, B: 0x36, A: 0xff}
+	sealRed  = color.RGBA{R: 0xc0, G: 0x50, B: 0x3a, A: 0xff}
+	washFar  = color.RGBA{R: 0xae, G: 0xbc, B: 0xb8, A: 0xff}
+	washMid  = color.RGBA{R: 0x7f, G: 0x97, B: 0x9a, A: 0xff}
+	washNear = color.RGBA{R: 0x4a, G: 0x65, B: 0x70, A: 0xff}
+	menuInk  = color.RGBA{A: 0xff}
 )
 
 // iconset 是 iconutil 认的文件名和对应像素尺寸。
@@ -117,7 +109,8 @@ func writePNG(path string, img image.Image) error {
 	return f.Close()
 }
 
-// renderApp 画一张 size×size 的 App 图标：纸色圆角方形、墨山、朱红小印。
+// renderApp 画一张 size×size 的 App 图标：纸底、红日、四层山峦，云带拦腰。
+// 绘制顺序就是深度顺序：日最远，墨山最近。
 func renderApp(size int) *image.RGBA {
 	ss := 4
 	if size >= 512 {
@@ -127,12 +120,13 @@ func renderApp(size int) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, w, w))
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: paper}, image.Point{}, draw.Src)
 
-	scale := float64(w) / 100
-	fill(img, inkWash, scalePoints(backPeak, scale))
-	fill(img, ink, scalePoints(mainPeak, scale))
-	fill(img, snow, scalePoints(snowCap, scale))
-	fill(img, sealRed, scalePoints(seal, scale))
-	fill(img, paper, scalePoints(sealPeak, scale))
+	s := float64(w) / 100
+	disc(img, sealRed, 66*s, 24*s, 11.5*s)
+	fill(img, washFar, scalePoints(ridge(54, 34, 14, 64, 88, 56, -10, 110, 64), s))
+	fill(img, washMid, scalePoints(ridge(24, 47, -8, 71, 50, 64, -10, 110, 76), s))
+	fillA(img, paper, 0.65, scalePoints(mist(62, 74), s))
+	fill(img, washNear, scalePoints(ridge(62, 56, 34, 73, 88, 70, -10, 110, 88), s))
+	fill(img, ink, scalePoints(ridge(40, 53, 6, 71, 66, 62, -10, 110, 95), s))
 	maskSquircle(img)
 
 	return downsample(img, ss)
@@ -159,6 +153,53 @@ func scalePoints(pts []point, s float64) []point {
 		out[i] = point{p.X * s, p.Y * s}
 	}
 	return out
+}
+
+// quad 二次贝塞尔采样 n+1 个点。
+func quad(p0, p1, p2 point, n int) []point {
+	pts := make([]point, 0, n+1)
+	for i := 0; i <= n; i++ {
+		t := float64(i) / float64(n)
+		u := 1 - t
+		pts = append(pts, point{
+			X: u*u*p0.X + 2*u*t*p1.X + t*t*p2.X,
+			Y: u*u*p0.Y + 2*u*t*p1.Y + t*t*p2.Y,
+		})
+	}
+	return pts
+}
+
+// ridge 山峦剪影：左右坡各一条二次贝塞尔相接于峰顶，底部延伸出画布。
+// 控制点越贴近基线，坡面越凹。
+func ridge(px, py, cxL, cyL, cxR, cyR, bx0, bx1, by float64) []point {
+	left := quad(point{bx0, by}, point{cxL, cyL}, point{px, py}, 28)
+	right := quad(point{px, py}, point{cxR, cyR}, point{bx1, by}, 28)
+	pts := append(append([]point{}, left...), right...)
+	return append(pts, point{bx1, by + 40}, point{bx0, by + 40})
+}
+
+// mist 云带：上下两条波浪边围成的横带，跨出画布左右。
+func mist(yTop, yBot float64) []point {
+	top := quad(point{-10, yTop}, point{50, yTop + 5}, point{110, yTop - 2}, 24)
+	bot := quad(point{110, yBot}, point{50, yBot + 5}, point{-10, yBot - 1}, 24)
+	pts := append(append([]point{}, top...), bot...)
+	return append(pts, point{-10, yTop - 2})
+}
+
+// disc 实心圆。
+func disc(img *image.RGBA, c color.RGBA, cx, cy, r float64) {
+	b := img.Bounds()
+	for y := int(cy - r); y <= int(cy+r)+1; y++ {
+		for x := int(cx - r); x <= int(cx+r)+1; x++ {
+			if x < b.Min.X || x >= b.Max.X || y < b.Min.Y || y >= b.Max.Y {
+				continue
+			}
+			dx, dy := float64(x)+0.5-cx, float64(y)+0.5-cy
+			if dx*dx+dy*dy <= r*r {
+				img.SetRGBA(x, y, c)
+			}
+		}
+	}
 }
 
 // fill 用扫描线填多边形（奇偶规则）。传透明色就是挖空。
@@ -196,6 +237,46 @@ func fill(img *image.RGBA, c color.RGBA, pts []point) {
 
 func clear(img *image.RGBA, pts []point) {
 	fill(img, color.RGBA{}, pts)
+}
+
+// fillA 半透明晕染：dst = dst*(1-a) + c*a。调用时所有像素都已不透明，
+// 直接按直线 alpha 混 RGB 即可。
+func fillA(img *image.RGBA, c color.RGBA, alpha float64, pts []point) {
+	b := img.Bounds()
+	ymin, ymax := math.Inf(1), math.Inf(-1)
+	for _, p := range pts {
+		ymin = math.Min(ymin, p.Y)
+		ymax = math.Max(ymax, p.Y)
+	}
+	y0 := max(int(ymin), b.Min.Y)
+	y1 := min(int(ymax)+1, b.Max.Y-1)
+
+	var xs []float64
+	for y := y0; y <= y1; y++ {
+		yc := float64(y) + 0.5
+		xs = xs[:0]
+		for i := range pts {
+			a, bb := pts[i], pts[(i+1)%len(pts)]
+			if (a.Y <= yc) == (bb.Y <= yc) {
+				continue
+			}
+			xs = append(xs, a.X+(yc-a.Y)/(bb.Y-a.Y)*(bb.X-a.X))
+		}
+		sort.Float64s(xs)
+		for i := 0; i+1 < len(xs); i += 2 {
+			from := max(int(math.Ceil(xs[i]-0.5)), b.Min.X)
+			to := min(int(math.Floor(xs[i+1]-0.5)), b.Max.X-1)
+			for x := from; x <= to; x++ {
+				d := img.RGBAAt(x, y)
+				img.SetRGBA(x, y, color.RGBA{
+					R: uint8(float64(d.R)*(1-alpha) + float64(c.R)*alpha),
+					G: uint8(float64(d.G)*(1-alpha) + float64(c.G)*alpha),
+					B: uint8(float64(d.B)*(1-alpha) + float64(c.B)*alpha),
+					A: 0xff,
+				})
+			}
+		}
+	}
 }
 
 // fillRoundedRect 画实心圆角矩形。边界在放大后的像素空间里，降采样负责抗锯齿。
