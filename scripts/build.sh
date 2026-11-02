@@ -3,9 +3,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-if [ ! -f dict.bin ] || [ "$(head -c 6 dict.bin)" != "WSIME2" ]; then
+aux=build/aux/moqi_aux_code.txt
+if [ ! -f dict.bin ] || [ "$(head -c 6 dict.bin)" != "WSIME2" ] ||
+	[ ! -s "$aux" ] || [ "$aux" -nt dict.bin ]; then
 	sh scripts/fetch-dict.sh
-	go run ./cmd/dictgen -o dict.bin \
+	go run ./cmd/dictgen -o dict.bin -aux "$aux" \
 		build/rime-ice/8105.dict.yaml build/rime-ice/base.dict.yaml build/rime-ice/others.dict.yaml
 fi
 

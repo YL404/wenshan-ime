@@ -444,7 +444,8 @@ func shortLists(entries []Entry) []Entry {
 	var curated [26]Entry
 	var hasCurated [26]bool
 	for _, e := range entries {
-		if len(e.Code) < 2 || e.Code[0] < 'a' || e.Code[0] > 'z' {
+		// 单键候选只从两键单字里选，别把三、四码的辅码条目也算进来。
+		if len(e.Code) != 2 || e.Code[0] < 'a' || e.Code[0] > 'z' {
 			continue
 		}
 		// 单键只给单字，避免「版权」「三国群英传」这类高频长词混进来。

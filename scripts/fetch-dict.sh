@@ -1,5 +1,5 @@
 #!/bin/sh
-# 下载生成词表用的 Rime 词库（rime-ice，GPL-3.0）。
+# 下载生成词表用的 Rime 词库（rime-ice）和单字辅码表（rime-frost），都是 GPL-3.0。
 set -eu
 cd "$(dirname "$0")/.."
 out=build/rime-ice
@@ -11,3 +11,11 @@ for f in cn_dicts/8105.dict.yaml cn_dicts/base.dict.yaml cn_dicts/others.dict.ya
 	curl -sSL --http1.1 --retry 4 --retry-all-errors --max-time 180 \
 		-o "$target" "https://cdn.jsdelivr.net/gh/iDvel/rime-ice@main/$f"
 done
+
+aux=build/aux/moqi_aux_code.txt
+mkdir -p "$(dirname "$aux")"
+if [ ! -s "$aux" ]; then
+	echo "下载辅码表"
+	curl -sSL --http1.1 --retry 4 --retry-all-errors --max-time 180 \
+		-o "$aux" "https://cdn.jsdelivr.net/gh/gaboolic/rime-frost@master/lua/aux_code/moqi_aux_code.txt"
+fi

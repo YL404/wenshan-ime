@@ -14,15 +14,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"wenshan/engine"
 )
 
 func main() {
 	out := flag.String("o", "dict.bin", "输出的词表文件")
+	aux := flag.String("aux", "", "单字辅码表（字=两位辅码）")
 	flag.Parse()
 	if flag.NArg() == 0 {
-		log.Fatal("用法: dictgen -o dict.bin <dict.yaml>...")
+		log.Fatal("用法: dictgen -o dict.bin [-aux 辅码表] <dict.yaml>...")
 	}
 
 	best := make(map[string]engine.Entry)
@@ -32,6 +34,13 @@ func main() {
 			log.Fatalf("%s: %v", path, err)
 		}
 		fmt.Printf("%s: %d 条\n", path, n)
+	}
+	if *aux != "" {
+		n, err := addAux(*aux, best)
+		if err != nil {
+			log.Fatalf("%s: %v", *aux, err)
+		}
+		fmt.Printf("%s: %d 条辅码\n", *aux, n)
 	}
 
 	entries := make([]engine.Entry, 0, len(best))
@@ -116,4 +125,77 @@ func parseLine(line string, best map[string]engine.Entry) int {
 		n++
 	}
 	return n
+}
+
+// addAux 给单字补 2+1 / 2+2 的辅码条目。码表每行「字=辅码」或「字<TAB>辅码」。
+// 只给词库里已有两键编码的单字加，权重取该字在词库里的最高权重。
+func addAux(path string, best map[string]engine.Entry) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	bases := make(map[string][]string)
+	weights := make(map[string]uint32)
+	for _, e := range best {
+		if len(e.Code) != 2 || utf8.RuneCountInString(e.Text) != 1 {
+			continue
+		}
+		bases[e.Text] = append(bases[e.Text], e.Code)
+		if e.Weight > weights[e.Text] {
+			weights[e.Text] = e.Weight
+		}
+	}
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	seen := make(map[string]bool)
+	n := 0
+	for sc.Scan() {
+		line := strings.TrimSpace(strings.TrimSuffix(sc.Text(), "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		ch, aux, ok := strings.Cut(line, "=")
+		if !ok {
+			ch, aux, ok = strings.Cut(line, "\t")
+		}
+		if !ok {
+			continue
+		}
+		ch, aux = strings.TrimSpace(ch), strings.TrimSpace(aux)
+		if utf8.RuneCountInString(ch) != 1 || aux == "" || !lowerLetters(aux) {
+			continue
+		}
+		w, ok := weights[ch]
+		if !ok {
+			continue
+		}
+		for _, base := range bases[ch] {
+			for k := 1; k <= len(aux) && k <= 2; k++ {
+				code := base + aux[:k]
+				key := code + "\x00" + ch
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				if old, ok := best[key]; ok && old.Weight >= w {
+					continue
+				}
+				best[key] = engine.Entry{Code: code, Text: ch, Weight: w}
+				n++
+			}
+		}
+	}
+	return n, sc.Err()
+}
+
+func lowerLetters(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return true
 }

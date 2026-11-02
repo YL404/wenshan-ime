@@ -134,6 +134,51 @@ func TestPrefixRanking(t *testing.T) {
 	}
 }
 
+// 辅码条目比普通音节多一到两键，等长匹配时应该排在同音字前面。
+func TestAuxRanking(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "ni", Text: "你", Weight: 500},
+		{Code: "ni", Text: "尼", Weight: 400},
+		{Code: "nir", Text: "你", Weight: 500},
+		{Code: "nirx", Text: "你", Weight: 500},
+	})
+	e := New(d)
+	typeCode := func(s string) {
+		e.Reset()
+		for _, ch := range []byte(s) {
+			e.Type(ch)
+		}
+	}
+
+	typeCode("nir")
+	if got := e.Candidates(); len(got) == 0 || got[0].Text != "你" {
+		t.Fatalf("nir 候选 = %v", got)
+	}
+	typeCode("nirx")
+	if got := e.Candidates(); len(got) == 0 || got[0].Text != "你" {
+		t.Fatalf("nirx 候选 = %v", got)
+	}
+}
+
+// 单键候选只取两键单字，辅码条目不能把同一个字重复塞进简码表。
+func TestShortListsExcludeAux(t *testing.T) {
+	entries := []Entry{
+		{Code: "ni", Text: "你", Weight: 500},
+		{Code: "nir", Text: "你", Weight: 500},
+		{Code: "nirx", Text: "你", Weight: 500},
+		{Code: "ni", Text: "尼", Weight: 100},
+	}
+	count := 0
+	for _, e := range shortLists(entries) {
+		if e.Text == "你" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("单键候选里「你」出现 %d 次, 期望 1", count)
+	}
+}
+
 func TestEngine(t *testing.T) {
 	d := buildDict(t, []Entry{
 		{Code: "ni", Text: "你", Weight: 500},
