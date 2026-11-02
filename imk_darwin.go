@@ -115,6 +115,7 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	}
 	if asciiMode {
 		spaceBeforeASCII(client, ch)
+		prevClass = classOfByte(ch)
 		prevDigit = isASCIIDigit(ch)
 		return false
 	}
@@ -295,6 +296,7 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 		return false
 	}
 	spaceBeforeASCII(client, ch)
+	prevClass = classOfByte(ch)
 	prevDigit = isASCIIDigit(ch)
 	return false
 }
@@ -374,6 +376,11 @@ func needSpaceBefore(ch byte) bool {
 	return isASCIIAlnum(ch) && prevClass == prevCJK
 }
 
+// needsSpaceBeforeCJK 报告上屏中文前是否要补空格。
+func needsSpaceBeforeCJK(prev, class int) bool {
+	return prev == prevASCII && class == prevCJK
+}
+
 func isASCIIDigit(ch byte) bool {
 	return ch >= '0' && ch <= '9'
 }
@@ -384,6 +391,15 @@ func isASCIIAlnum(ch byte) bool {
 
 func endsWithASCIIDigit(s string) bool {
 	return len(s) > 0 && isASCIIDigit(s[len(s)-1])
+}
+
+// classOfByte 判断透传给应用的单个字符属于哪一类。数字和字母后接中文要
+// 补空格，标点后不补。
+func classOfByte(ch byte) int {
+	if isASCIIAlnum(ch) {
+		return prevASCII
+	}
+	return prevNone
 }
 
 func startsWithHan(s string) bool {
@@ -556,7 +572,7 @@ func commit(client objc.ID, text string) {
 	}
 	class := classOf(text)
 	// 中文紧跟在英文或数字后面时，先补一个空格。
-	if prevClass == prevASCII && class == prevCJK {
+	if needsSpaceBeforeCJK(prevClass, class) {
 		text = " " + text
 	}
 	insertText(client, text)

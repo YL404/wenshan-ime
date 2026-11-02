@@ -101,4 +101,16 @@ func TestSpacing(t *testing.T) {
 	if classOf("我") != prevCJK || classOf("abc") != prevASCII || classOf("API") != prevASCII || classOf("，") != prevNone || classOf("") != prevNone {
 		t.Fatal("classOf 分类不对")
 	}
+	// 透传的数字和字母要记成 ASCII，后面的中文才会自动补空格；
+	// 透传的标点不补。
+	if classOfByte('3') != prevASCII || classOfByte('a') != prevASCII || classOfByte('.') != prevNone {
+		t.Fatal("classOfByte 分类不对")
+	}
+	// 1.2.3 后面接中文时，最后那个 3 要算 ASCII，才会补空格。
+	if !needsSpaceBeforeCJK(classOfByte('3'), classOf("是")) {
+		t.Fatal("数字后接中文应该补空格")
+	}
+	if needsSpaceBeforeCJK(classOfByte('.'), classOf("是")) {
+		t.Fatal("标点后接中文不该补空格")
+	}
 }
