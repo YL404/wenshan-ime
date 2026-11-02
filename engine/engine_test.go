@@ -91,6 +91,96 @@ func buildDict(t testing.TB, entries []Entry) *Dict {
 	return d
 }
 
+func TestPaging(t *testing.T) {
+	entries := make([]Entry, 0, 25)
+	for i := 0; i < 25; i++ {
+		entries = append(entries, Entry{
+			Code:   "ni",
+			Text:   string(rune('a' + i)),
+			Weight: uint32(2500 - i),
+		})
+	}
+	e := New(buildDict(t, entries))
+	e.Type('n')
+	e.Type('i')
+
+	if got := e.Candidates(); len(got) != pageSize || got[0].Text != "a" {
+		t.Fatalf("第 1 页 = %v", got)
+	}
+	if !e.Page(1) {
+		t.Fatal("第 1 页翻不到第 2 页")
+	}
+	if got := e.Candidates(); len(got) != pageSize || got[0].Text != "j" {
+		t.Fatalf("第 2 页 = %v", got)
+	}
+	if !e.Page(1) {
+		t.Fatal("第 2 页翻不到第 3 页")
+	}
+	if got := e.Candidates(); len(got) != 7 || got[0].Text != "s" {
+		t.Fatalf("第 3 页 = %v", got)
+	}
+	if e.Page(1) {
+		t.Fatal("超过 3 页还能继续翻")
+	}
+	if got := e.Candidates(); len(got) != 7 || got[0].Text != "s" {
+		t.Fatalf("末页再翻后变成 %v", got)
+	}
+	if !e.Page(-1) || !e.Page(-1) {
+		t.Fatal("翻不回第 1 页")
+	}
+	if got := e.Candidates(); len(got) != pageSize || got[0].Text != "a" {
+		t.Fatalf("回到第 1 页 = %v", got)
+	}
+	if e.Page(-1) {
+		t.Fatal("第 1 页还能继续往前翻")
+	}
+
+	// 换输入或者退格后，页状态必须回到第 1 页。
+	if !e.Page(1) {
+		t.Fatal("翻页失败")
+	}
+	e.Backspace()
+	if got := e.Candidates(); len(got) == 0 || got[0].Text != "a" {
+		t.Fatalf("退格后没有回到第 1 页: %v", got)
+	}
+	e.Type('i')
+	if got := e.Candidates(); len(got) == 0 || got[0].Text != "a" {
+		t.Fatalf("重新输入后没有回到第 1 页: %v", got)
+	}
+
+	// 选当前页的候选，不能选到第 1 页的首选。
+	if !e.Page(1) {
+		t.Fatal("翻页失败")
+	}
+	text, ok := e.Select(0)
+	if !ok || text != "j" {
+		t.Fatalf("第 2 页首选 = %q, %v", text, ok)
+	}
+	if len(e.Buffer()) != 0 || len(e.Candidates()) != 0 {
+		t.Fatal("选词后没有清空")
+	}
+}
+
+func TestPagingSinglePage(t *testing.T) {
+	entries := make([]Entry, 0, pageSize)
+	for i := 0; i < pageSize; i++ {
+		entries = append(entries, Entry{
+			Code:   "ni",
+			Text:   string(rune('a' + i)),
+			Weight: uint32(100 - i),
+		})
+	}
+	e := New(buildDict(t, entries))
+	e.Type('n')
+	e.Type('i')
+	if e.Page(1) || e.Page(-1) {
+		t.Fatal("只有一页时不应该翻动")
+	}
+	if len(e.Candidates()) != pageSize {
+		t.Fatalf("候选数 = %d", len(e.Candidates()))
+	}
+}
+
 func TestPrefixRanking(t *testing.T) {
 	// 按编码升序、同编码权重降序排列，这是 Prefix 的前提。
 	d := buildDict(t, []Entry{

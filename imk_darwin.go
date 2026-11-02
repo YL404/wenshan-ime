@@ -27,6 +27,8 @@ const (
 	keyCodeReturn      = 36
 	keyCodeKeypadEnter = 76
 	keyCodeTab         = 48
+	keyCodePageUp      = 116
+	keyCodePageDown    = 121
 	keyCodeLeftShift   = 56
 	keyCodeRightShift  = 60
 )
@@ -157,6 +159,22 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 		}
 		prevClass = prevNone
 		return false
+	case keyCodePageUp:
+		if len(eng.Candidates()) == 0 {
+			return false
+		}
+		if eng.Page(-1) {
+			showCandidates(client)
+		}
+		return true
+	case keyCodePageDown:
+		if len(eng.Candidates()) == 0 {
+			return false
+		}
+		if eng.Page(1) {
+			showCandidates(client)
+		}
+		return true
 	}
 
 	if len(eng.Buffer()) > 0 && ch >= '1' && ch <= '9' {
@@ -171,6 +189,17 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 			commit(client, text)
 			return true
 		}
+	}
+	// = / - 翻页。候选窗开着时由输入法接管，到边界也不再当字符上屏。
+	if len(eng.Candidates()) > 0 && (ch == '=' || ch == '-') {
+		delta := 1
+		if ch == '-' {
+			delta = -1
+		}
+		if eng.Page(delta) {
+			showCandidates(client)
+		}
+		return true
 	}
 	if ch >= 'a' && ch <= 'z' {
 		if eng.Type(ch) {
