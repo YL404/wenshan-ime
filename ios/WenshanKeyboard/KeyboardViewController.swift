@@ -1,288 +1,473 @@
 import UIKit
+import os
 
-/// 键盘扩展入口：构建 UI、把按键转发给 KeyboardModel、按状态渲染候选条。
-/// 输入逻辑都在 KeyboardModel，这里只做渲染和转发。
+private let keyboardLog = Logger(subsystem: "im.wenshan.ios.keyboard", category: "lifecycle")
+
+/// 键盘扩展入口：只做布局、渲染和按键转发，输入语义在 KeyboardModel。
 final class KeyboardViewController: UIInputViewController {
     private let model = KeyboardModel()
-    /// 候选条外层：翻页按钮 + 横向滚动区。
-    private let candidateBar = UIStackView()
-    private let candidateScroll = UIScrollView()
-    /// 滚动区里的候选按钮，按内容宽度排，超出横滑。
-    private let candidateStack = UIStackView()
+    private let candidateBar = CandidateBar()
     private let keyboardStack = UIStackView()
-    private var shiftButton: UIButton?
-    private var pagePrevButton: UIButton?
-    private var pageNextButton: UIButton?
+    private let root = UIStackView()
+    private var heightConstraint: NSLayoutConstraint!
+    private var candidateHeightConstraint: NSLayoutConstraint!
+    private var metrics = KeyboardMetrics.make(screen: .zero, isPad: false)
+
+    private var shiftButton: KeyButton?
+    private var modeButton: KeyButton?
+    private var returnButton: KeyButton?
+    private var symbolsOn = false
+    private var hasMarkedText = false
+    private var isApplyingText = false
 
     private let letterRows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
     private let symbolRows = ["1234567890", "-/:;()¥&@\"", "。？！，、；：…"]
 
-    /// 符号页开关：字母页和符号页切换。
-    private var symbolsOn = false
-
     override func viewDidLoad() {
         super.viewDidLoad()
+        keyboardLog.info("viewDidLoad")
         buildUI()
+        loadEngine()
         render()
-        Task { [weak self] in
-            await self?.model.load()
-            self?.renderCandidates()
-        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        Task { [weak self] in
-            await self?.model.load()
-            self?.renderCandidates()
+        updateContext()
+        if model.phase != .ready {
+            loadEngine()
         }
         render()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
+        keyboardLog.info("viewWillDisappear")
         super.viewWillDisappear(animated)
+        model.flush()
         model.reset()
-        textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
-        renderCandidates()
+        clearMarkedText()
+        candidateBar.setCandidates([], status: nil)
     }
-
-    /// 外部改了正文（换输入框、光标动了）：丢掉组合，重新渲染。
+    /// 外部改正文：只在组合态重置，避免每次选词都误清状态。
     override func textDidChange(_ textInput: UITextInput?) {
+        guard !isApplyingText, model.isComposing else { return }
         model.reset()
-        renderCandidates()
+        render()
     }
 
     override func selectionWillChange(_ textInput: UITextInput?) {
+        guard model.isComposing else { return }
         model.reset()
-        renderCandidates()
+        clearMarkedText()
+        render()
     }
 
     override func selectionDidChange(_ textInput: UITextInput?) {
+        guard model.isComposing else { return }
         model.reset()
-        renderCandidates()
+        clearMarkedText()
+        render()
     }
 
-    // MARK: - UI 构建
+    override func viewWillTransition(
+        to size: CGSize,
+        with coordinator: UIViewControllerTransitionCoordinator
+    ) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.updateMetrics()
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateMetrics()
+    }
+
+    // MARK: - UI
 
     private func buildUI() {
         view.backgroundColor = .systemGray5
-        let height = view.heightAnchor.constraint(equalToConstant: 270)
-        height.priority = .defaultHigh
-        height.isActive = true
+        metrics = currentMetrics()
 
-        candidateBar.axis = .horizontal
-        candidateBar.spacing = 4
-        candidateBar.alignment = .fill
-        candidateBar.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        heightConstraint = view.heightAnchor.constraint(equalToConstant: metrics.totalHeight)
+        heightConstraint.priority = .defaultHigh
+        heightConstraint.isActive = true
 
-        candidateScroll.showsHorizontalScrollIndicator = false
-        candidateScroll.alwaysBounceHorizontal = true
-
-        candidateStack.axis = .horizontal
-        candidateStack.spacing = 4
-        candidateStack.alignment = .center
-        candidateStack.translatesAutoresizingMaskIntoConstraints = false
-        candidateScroll.addSubview(candidateStack)
-        NSLayoutConstraint.activate([
-            candidateStack.leadingAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.leadingAnchor, constant: 6),
-            candidateStack.trailingAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.trailingAnchor, constant: -6),
-            candidateStack.topAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.topAnchor),
-            candidateStack.bottomAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.bottomAnchor),
-            candidateStack.heightAnchor.constraint(equalTo: candidateScroll.frameLayoutGuide.heightAnchor),
-        ])
-
-        let pagePrev = keyButton("‹", label: "上一页") { [weak self] in
+        candidateBar.translatesAutoresizingMaskIntoConstraints = false
+        candidateHeightConstraint = candidateBar.heightAnchor.constraint(equalToConstant: metrics.candidateHeight)
+        candidateHeightConstraint.isActive = true
+        candidateBar.setCandidateFont(.systemFont(ofSize: metrics.candidateFontSize))
+        candidateBar.onSelect = { [weak self] index in
             guard let self else { return }
-            self.apply(self.model.page(-1))
+            self.apply(self.model.select(index))
         }
-        let pageNext = keyButton("›", label: "下一页") { [weak self] in
+        candidateBar.onPage = { [weak self] delta in
             guard let self else { return }
-            self.apply(self.model.page(1))
+            self.apply(self.model.page(delta))
         }
-        pagePrev.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        pageNext.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        pagePrevButton = pagePrev
-        pageNextButton = pageNext
-        candidateBar.addArrangedSubview(pagePrev)
-        candidateBar.addArrangedSubview(candidateScroll)
-        candidateBar.addArrangedSubview(pageNext)
+        candidateBar.onDismiss = { [weak self] in
+            self?.dismissKeyboard()
+        }
 
         keyboardStack.axis = .vertical
-        keyboardStack.spacing = 6
+        keyboardStack.spacing = metrics.gap
         keyboardStack.distribution = .fillEqually
         keyboardStack.alignment = .fill
-        renderKeyboardRows()
+        keyboardStack.translatesAutoresizingMaskIntoConstraints = false
 
-        let shift = keyButton("⇧", label: "大写") { [weak self] in
-            self?.model.toggleShift()
-            self?.render()
-        }
-        shiftButton = shift
-
-        let bottom = UIStackView(arrangedSubviews: [
-            keyButton("🌐", label: "切换键盘") { [weak self] in
-                self?.advanceToNextInputMode()
-            },
-            shift,
-            keyButton("符", label: "符号") { [weak self] in
-                self?.toggleSymbols()
-            },
-            keyButton("空格", label: "空格") { [weak self] in
-                guard let self else { return }
-                apply(self.model.space())
-            },
-            keyButton("⌫", label: "删除") { [weak self] in
-                guard let self else { return }
-                apply(self.model.backspace())
-            },
-            keyButton("换行", label: "换行") { [weak self] in
-                guard let self else { return }
-                apply(self.model.returnKey())
-            },
-        ])
-        bottom.axis = .horizontal
-        bottom.spacing = 4
-        bottom.distribution = .fillEqually
-        bottom.alignment = .fill
-        // 底行固定高度，字母三行拿剩余空间（约 49pt/行，接近系统键盘）。
-        bottom.heightAnchor.constraint(equalToConstant: 46).isActive = true
-
-        let root = UIStackView(arrangedSubviews: [candidateBar, keyboardStack, bottom])
         root.axis = .vertical
-        root.spacing = 6
+        root.spacing = metrics.gap
         root.alignment = .fill
         root.translatesAutoresizingMaskIntoConstraints = false
+        root.addArrangedSubview(candidateBar)
+        root.addArrangedSubview(keyboardStack)
         view.addSubview(root)
+
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
             root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -6),
             root.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
             root.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
         ])
+
+        renderKeyboardRows()
     }
 
-    private func keyButton(_ title: String, label: String? = nil, action: @escaping () -> Void) -> UIButton {
-        var config = UIButton.Configuration.filled()
-        config.title = title
-        config.baseBackgroundColor = .secondarySystemBackground
-        config.baseForegroundColor = .label
-        config.cornerStyle = .small
-        config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 2)
-        let button = UIButton(configuration: config)
-        button.titleLabel?.font = .systemFont(ofSize: 18)
-        button.accessibilityLabel = label ?? title
-        button.addAction(UIAction { _ in
-            action()
-        }, for: .touchUpInside)
-        return button
+    private func currentMetrics() -> KeyboardMetrics {
+        let screen = view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
+        return KeyboardMetrics.make(
+            screen: screen,
+            isPad: traitCollection.userInterfaceIdiom == .pad)
     }
 
-    /// 按当前页（字母/符号）重建键盘行。字母键进引擎组词，符号键直接插入。
+    private func updateMetrics() {
+        let next = currentMetrics()
+        guard next.totalHeight != metrics.totalHeight
+            || next.candidateHeight != metrics.candidateHeight
+            || next.gap != metrics.gap
+            || next.keyFontSize != metrics.keyFontSize
+            || next.candidateFontSize != metrics.candidateFontSize
+        else { return }
+        metrics = next
+        heightConstraint.constant = next.totalHeight
+        candidateHeightConstraint.constant = next.candidateHeight
+        root.spacing = next.gap
+        keyboardStack.spacing = next.gap
+        candidateBar.setCandidateFont(.systemFont(ofSize: next.candidateFontSize))
+        renderKeyboardRows()
+        view.setNeedsLayout()
+    }
+
+    /// 按当前页重建键盘行。只在切页/换方向时调用，不在每次按键时调用。
     private func renderKeyboardRows() {
         keyboardStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for row in symbolsOn ? symbolRows : letterRows {
-            let rowStack = UIStackView()
-            rowStack.axis = .horizontal
-            rowStack.spacing = 4
-            rowStack.distribution = .fillEqually
-            rowStack.alignment = .fill
-            for ch in row {
-                rowStack.addArrangedSubview(keyButton(String(ch)) { [weak self] in
-                    guard let self else { return }
-                    if self.symbolsOn {
-                        self.apply(self.model.insert(String(ch)))
-                    } else {
-                        self.type(String(ch))
-                    }
-                })
+        shiftButton = nil
+        modeButton = nil
+        returnButton = nil
+
+        if symbolsOn {
+            for row in symbolRows {
+                keyboardStack.addArrangedSubview(makeRow(row.map { character in
+                    makeKey(
+                        title: String(character),
+                        identifier: "key_\(character)",
+                        action: { [weak self] in
+                            guard let self else { return }
+                            self.apply(self.model.insert(String(character)))
+                        })
+                }))
             }
-            keyboardStack.addArrangedSubview(rowStack)
-            rowStack.widthAnchor.constraint(equalTo: keyboardStack.widthAnchor).isActive = true
+            keyboardStack.addArrangedSubview(makeSymbolBottomRow())
+        } else {
+            for (index, row) in letterRows.enumerated() {
+                if index == 2 {
+                    keyboardStack.addArrangedSubview(makeLetterBottomRow(row))
+                } else {
+                    keyboardStack.addArrangedSubview(makeRow(row.map { character in
+                        makeKey(
+                            title: String(character),
+                            identifier: "key_\(character)",
+                            action: { [weak self] in
+                                guard let self else { return }
+                                self.apply(self.model.type(String(character)))
+                            })
+                    }))
+                }
+            }
+            keyboardStack.addArrangedSubview(makeLetterFunctionRow())
         }
     }
 
-    // MARK: - 按键转发
-
-    private func type(_ key: String) {
-        apply(model.type(key, shift: model.shiftOn))
+    private func makeRow(_ keys: [KeyButton]) -> UIStackView {
+        let row = UIStackView(arrangedSubviews: keys)
+        row.axis = .horizontal
+        row.spacing = metrics.gap
+        row.distribution = .fillEqually
+        row.alignment = .fill
+        row.translatesAutoresizingMaskIntoConstraints = false
+        return row
     }
 
-    /// 字母页和符号页切换：重建键盘行。
-    private func toggleSymbols() {
-        symbolsOn.toggle()
-        renderKeyboardRows()
+    private func makeLetterBottomRow(_ row: String) -> UIStackView {
+        let shift = makeKey(
+            title: "⇧",
+            identifier: "key_shift",
+            action: { [weak self] in
+                guard let self else { return }
+                self.model.shiftTapped()
+                self.render()
+            },
+            background: .secondarySystemBackground)
+        shift.accessibilityLabel = "大写"
+        shiftButton = shift
+
+        var keys: [KeyButton] = [shift]
+        for character in row {
+            keys.append(makeKey(
+                title: String(character),
+                identifier: "key_\(character)",
+                action: { [weak self] in
+                    guard let self else { return }
+                    self.apply(self.model.type(String(character)))
+                }))
+        }
+        let delete = makeKey(
+            title: "⌫",
+            identifier: "key_delete",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.backspace())
+            },
+            background: .secondarySystemBackground)
+        delete.accessibilityLabel = "删除"
+        keys.append(delete)
+        return makeRow(keys)
+    }
+
+    private func makeLetterFunctionRow() -> UIStackView {
+        let symbols = makeKey(
+            title: "符",
+            identifier: "key_symbols",
+            action: { [weak self] in self?.toggleSymbols() },
+            background: .secondarySystemBackground)
+        symbols.accessibilityLabel = "符号"
+
+        let mode = makeKey(
+            title: "中",
+            identifier: "key_mode",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.toggleMode())
+            },
+            background: .secondarySystemBackground)
+        mode.accessibilityLabel = "切换中英文"
+        modeButton = mode
+
+        let space = makeKey(
+            title: "空格",
+            identifier: "key_space",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.space())
+            },
+            background: .secondarySystemBackground)
+        space.accessibilityLabel = "空格"
+
+        let returnKey = makeKey(
+            title: "换行",
+            identifier: "key_return",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.returnKey())
+            },
+            background: .secondarySystemBackground)
+        returnKey.accessibilityLabel = "换行"
+        returnButton = returnKey
+
+        return makeRow([symbols, mode, space, returnKey])
+    }
+
+    private func makeSymbolBottomRow() -> UIStackView {
+        let letters = makeKey(
+            title: "ABC",
+            identifier: "key_letters",
+            action: { [weak self] in self?.toggleSymbols() },
+            background: .secondarySystemBackground)
+        letters.accessibilityLabel = "字母"
+
+        let mode = makeKey(
+            title: "中",
+            identifier: "key_mode",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.toggleMode())
+            },
+            background: .secondarySystemBackground)
+        mode.accessibilityLabel = "切换中英文"
+        modeButton = mode
+
+        let space = makeKey(
+            title: "空格",
+            identifier: "key_space",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.space())
+            },
+            background: .secondarySystemBackground)
+        space.accessibilityLabel = "空格"
+
+        let delete = makeKey(
+            title: "⌫",
+            identifier: "key_delete",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.backspace())
+            },
+            background: .secondarySystemBackground)
+        delete.accessibilityLabel = "删除"
+
+        let returnKey = makeKey(
+            title: "换行",
+            identifier: "key_return",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.returnKey())
+            },
+            background: .secondarySystemBackground)
+        returnKey.accessibilityLabel = "换行"
+        returnButton = returnKey
+
+        return makeRow([letters, mode, space, delete, returnKey])
+    }
+
+    private func makeKey(
+        title: String,
+        identifier: String,
+        action: @escaping () -> Void,
+        background: UIColor = .systemBackground
+    ) -> KeyButton {
+        let button = KeyButton(
+            title: title,
+            identifier: identifier,
+            font: .systemFont(ofSize: metrics.keyFontSize),
+            background: background)
+        button.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        return button
+    }
+
+    // MARK: - 引擎和上下文
+
+    private func loadEngine() {
+        let directory = dataDirectory()
+        keyboardLog.info("loadEngine data=\(directory.path, privacy: .public)")
+        Task { [weak self] in
+            await self?.model.load(dataDirectory: directory)
+            if case .failed(let reason) = self?.model.phase {
+                keyboardLog.error("engine failed: \(reason, privacy: .public)")
+            }
+            self?.render()
+        }
+    }
+
+    /// App Group 可写时用共享目录；否则退回扩展自己的 Documents。
+    private func dataDirectory() -> URL {
+        let fm = FileManager.default
+        if let group = AppGroup.dataDirectoryURL {
+            do {
+                try fm.createDirectory(at: group, withIntermediateDirectories: true)
+                let probe = group.appendingPathComponent(".write-test")
+                try Data().write(to: probe, options: .atomic)
+                try? fm.removeItem(at: probe)
+                return group
+            } catch {
+                // 没有 Full Access 时 App Group 可能只读，继续走沙箱。
+            }
+        }
+        let documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let fallback = documents.appendingPathComponent("Wenshan", isDirectory: true)
+        try? fm.createDirectory(at: fallback, withIntermediateDirectories: true)
+        return fallback
+    }
+
+    private func updateContext() {
+        model.updateContext(returnKeyType: textDocumentProxy.returnKeyType ?? .default)
     }
 
     // MARK: - 渲染
 
     private func render() {
-        let buffer = model.buffer
-        textDocumentProxy.setMarkedText(buffer, selectedRange: NSRange(location: buffer.utf16.count, length: 0))
-        renderCandidates()
-        updateShiftVisual()
+        updateMarkedText()
+        updateCandidateBar()
+        updateKeys()
     }
 
-    private func renderCandidates() {
-        candidateStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let hasCandidates = !model.candidates.isEmpty
-        pagePrevButton?.isHidden = !hasCandidates
-        pageNextButton?.isHidden = !hasCandidates
-        if !hasCandidates {
-            candidateStack.addArrangedSubview(makeStatusLabel())
-            return
-        }
-        for (index, text) in model.candidates.enumerated() {
-            var config = UIButton.Configuration.plain()
-            config.title = text
-            config.baseForegroundColor = .label
-            config.titleLineBreakMode = .byClipping
-            config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 4, trailing: 6)
-            let button = UIButton(configuration: config)
-            button.titleLabel?.font = .systemFont(ofSize: 20)
-            button.accessibilityLabel = text
-            button.addAction(UIAction { [weak self] _ in
-                guard let self else { return }
-                self.apply(self.model.select(index))
-            }, for: .touchUpInside)
-            candidateStack.addArrangedSubview(button)
-        }
-    }
-
-    /// 候选条占位：按引擎状态显示加载中、失败原因或默认文案。
-    private func makeStatusLabel() -> UILabel {
-        let label = UILabel()
-        label.font = .systemFont(ofSize: 14)
+    private func updateCandidateBar() {
+        let status: String?
         switch model.phase {
         case .loading:
-            label.text = "加载中…"
-            label.textColor = .secondaryLabel
+            status = "加载中…"
         case .failed(let reason):
-            label.text = "词表加载失败：\(reason)"
-            label.textColor = .systemRed
+            status = "词表加载失败：\(reason)"
         case .ready:
-            label.text = "文山"
-            label.textColor = .secondaryLabel
+            status = model.mode == .chinese ? "文山" : "English"
         }
-        return label
+        candidateBar.setCandidates(model.candidates, status: status)
     }
 
-    private func updateShiftVisual() {
-        guard let shiftButton else { return }
-        shiftButton.configuration?.baseBackgroundColor = model.shiftOn ? .systemBlue : .secondarySystemBackground
-        shiftButton.configuration?.baseForegroundColor = model.shiftOn ? .white : .label
+    private func updateMarkedText() {
+        let text = model.mode == .chinese && model.isComposing ? model.buffer : ""
+        if text.isEmpty {
+            clearMarkedText()
+            return
+        }
+        isApplyingText = true
+        textDocumentProxy.setMarkedText(
+            text,
+            selectedRange: NSRange(location: text.utf16.count, length: 0))
+        isApplyingText = false
+        hasMarkedText = true
+    }
+
+    private func clearMarkedText() {
+        guard hasMarkedText else { return }
+        isApplyingText = true
+        textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+        isApplyingText = false
+        hasMarkedText = false
+    }
+
+    private func updateKeys() {
+        shiftButton?.setTitle(model.shift == .locked ? "⇪" : "⇧", for: .normal)
+        shiftButton?.setActive(model.shift.isActive)
+        modeButton?.setTitle(model.mode == .chinese ? "中" : "EN", for: .normal)
+        modeButton?.setActive(model.mode == .english)
+        returnButton?.setTitle(model.returnKeyTitle, for: .normal)
+        returnButton?.accessibilityLabel = model.returnKeyTitle
+    }
+
+    private func toggleSymbols() {
+        symbolsOn.toggle()
+        renderKeyboardRows()
+        render()
     }
 
     private func apply(_ outcome: KeyboardOutcome) {
         switch outcome {
         case .commit(let text):
-            // 组合已处理：先摘掉 marked text 再上屏，避免正文和组合区脱节；
-            // 连续选词剩下的组合由 render() 重新挂上。
-            textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+            isApplyingText = true
+            if hasMarkedText {
+                textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+                hasMarkedText = false
+            }
             if !text.isEmpty {
                 textDocumentProxy.insertText(text)
             }
+            isApplyingText = false
         case .deleteBackward:
+            isApplyingText = true
             textDocumentProxy.deleteBackward()
+            isApplyingText = false
         case .handled, .idle:
             break
         }

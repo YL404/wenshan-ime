@@ -9,6 +9,7 @@ package mobile
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,12 +25,13 @@ var (
 	lastErr string
 )
 
-// Open 映射词表并建立引擎。dictPath 由 Swift 侧从扩展 Bundle 或
-// App Group 容器传进来；Go 不自己猜 iOS 的沙箱路径。
-func Open(dictPath string) bool {
+// Open 映射词表并建立引擎。dictPath 由 Swift 侧从 App Group 或
+// 扩展 Bundle 传进来；dataDir 用来加载用户词频、自造词和短语。
+func Open(dictPath, dataDir string) bool {
 	mu.Lock()
 	defer mu.Unlock()
 
+	flushLocked()
 	closeLocked()
 	lastErr = ""
 
@@ -67,6 +69,11 @@ func Open(dictPath string) bool {
 	}
 	dictMap = data
 	eng = engine.New(d)
+	if dataDir != "" {
+		eng.SetFreq(engine.LoadFreq(filepath.Join(dataDir, "freq.tsv")))
+		eng.SetUserDict(engine.LoadUserDict(filepath.Join(dataDir, "userdict.tsv")))
+		eng.SetPhrases(engine.LoadUserDict(filepath.Join(dataDir, "phrases.tsv")))
+	}
 	return true
 }
 
@@ -77,12 +84,31 @@ func LastError() string {
 	return lastErr
 }
 
-// Close 释放映射。扩展退出前调用不是必须的，系统会回收；
-// 留在这里主要方便测试和以后切换词表。
+// Close 保存用户数据并释放映射。
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()
+	flushLocked()
 	closeLocked()
+}
+
+// Flush 把攒够次数的词频和自造词写盘。扩展退出前调用。
+func Flush() {
+	mu.Lock()
+	defer mu.Unlock()
+	flushLocked()
+}
+
+func flushLocked() {
+	if eng == nil {
+		return
+	}
+	if err := eng.SaveFreq(); err != nil {
+		lastErr = err.Error()
+	}
+	if err := eng.SaveUser(); err != nil {
+		lastErr = err.Error()
+	}
 }
 
 func closeLocked() {
@@ -131,6 +157,7 @@ func Select(i int) string {
 	if !ok {
 		return ""
 	}
+	flushLocked()
 	return text
 }
 

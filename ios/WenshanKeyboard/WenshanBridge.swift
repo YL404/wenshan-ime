@@ -17,16 +17,38 @@ struct ComposingState: Equatable {
 /// gomobile 桥的 Swift 门面。所有引擎调用都从主线程进来；
 /// 词表 mmap 由 Go 侧加锁，后台线程读词表也安全。
 enum WenshanBridge {
-    /// 打开词表并建立引擎。path 从扩展 Bundle 里找 dict.bin。
+    /// 打开词表并建立引擎。优先用主 App 部署到 App Group 的词表；
+    /// 没部署或打不开时退回扩展 Bundle 里的同一份文件。
     /// 失败时返回错误原因，成功返回 nil。
-    static func open() -> String? {
-        guard let path = Bundle.main.path(forResource: "dict", ofType: "bin") else {
+    static func open(dataDirectory: URL) -> String? {
+        var paths: [String] = []
+        if let shared = AppGroup.dictURL {
+            paths.append(shared.path)
+        }
+        if let bundled = Bundle.main.path(forResource: "dict", ofType: "bin") {
+            paths.append(bundled)
+        }
+        guard !paths.isEmpty else {
             return "扩展里找不到 dict.bin"
         }
-        if MobileOpen(path) {
-            return nil
+        var lastError = ""
+        for path in paths {
+            if MobileOpen(path, dataDirectory.path) {
+                return nil
+            }
+            lastError = MobileLastError()
         }
-        return MobileLastError()
+        return lastError
+    }
+
+    /// 把词频和自造词写盘。
+    static func flush() {
+        MobileFlush()
+    }
+
+    /// 释放引擎和词表映射。
+    static func close() {
+        MobileClose()
     }
 
     /// 追加一个或多个 ASCII 按键，返回按键后的组合状态。

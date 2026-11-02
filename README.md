@@ -49,11 +49,11 @@ CODESIGN_IDENTITY="Apple Development: 你的名字 (XXXXXXXXXX)" sh scripts/inst
 pkill -f "Input Methods/Wenshan.app"; rm -rf ~/Library/Input\ Methods/Wenshan.app
 ```
 
-## iOS（实验）
+## iOS
 
-`ios/` 下有 Go 内核 + Swift 键盘扩展的 PoC，复用同一个 `engine/`。当前只跑通
-26 键、候选条和上屏链路；构建方法、模拟器启用方式和已知限制见
-[ios/README.md](ios/README.md)。
+`ios/` 下是 Go 内核 + Swift 6 键盘扩展，复用同一个 `engine/`。已接通 App Group 词表部署、
+候选条、中英切换、Shift、符号页，以及用户词频/自造词/短语加载；仍在模拟器验证阶段，
+真机内存和发布化未完成。构建、无头模拟器验证和已知限制见 [ios/README.md](ios/README.md)。
 
 ## 按键
 

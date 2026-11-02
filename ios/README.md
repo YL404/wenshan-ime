@@ -1,19 +1,45 @@
-# 文山 iOS（实验）
+# 文山 iOS
 
-用 Go 内核 + Swift 6 键盘扩展验证 iOS 版可行性。当前功能：
-26 键输入、候选条（横滑 + 翻页）、Shift 一次性大写、符号页、
-`MobileType`/`MobileSelect` 上屏、主 App 内引擎自检。
+Go 内核 + Swift 6 键盘扩展。和 macOS 共用 `engine/`，iOS 只负责键盘壳、共享数据和系统输入上下文。
+
+当前可用：26 键自然码、候选条横滑/翻页、首选上屏、Shift 一次性大写与双击锁定、
+中英切换、符号页、`returnKeyType` 标题、收起键盘、App Group 词表、用户词频/自造词/短语加载。
 
 ## 结构
 
-- `mobile/`：gomobile 导出的 Go 引擎入口，候选列表用换行分隔的字符串返回。
-- `WenshanKeyboard/`：键盘扩展，词表 `dict.bin` 打进扩展 Bundle。
-  - `WenshanBridge.swift`：gomobile 桥的 Swift 门面，跨语言调用收在这一处。
-  - `KeyboardModel.swift`：`@MainActor` 输入状态机（引擎加载、组合、翻页、Shift）。
-  - `KeyboardViewController.swift`：UI 构建与渲染，不直接碰引擎桥。
-- `WenshanHost/`：宿主 App，带启用说明和引擎自检。
-- `WenshanUITests/`：模拟器 UI 测试，试打 `womf` 上屏「我们」。
-- `project.yml`：XcodeGen 工程定义（Swift 6 语言模式）；`.xcodeproj` 和 Info.plist 都是生成物，不入库。
+- `mobile/`：gomobile 导出的 Go 引擎入口。
+  - `Open(dictPath, dataDir)`：映射词表，并从 `dataDir` 加载 `freq.tsv`、`userdict.tsv`、`phrases.tsv`。
+  - `Flush()` / `Close()`：把攒够次数的词频和自造词写盘。
+- `Shared/AppGroup.swift`：App Group 标识和共享目录路径。
+- `WenshanHost/`：宿主 App。
+  - `DictDeployer.swift`：把扩展 Bundle 里的 `dict.bin` 原子部署到 App Group。
+  - `ContentView.swift`：启用说明、词表状态、用户数据统计/清空、测试输入框。
+- `WenshanKeyboard/`：键盘扩展。
+  - `WenshanBridge.swift`：gomobile 桥的 Swift 门面。
+  - `KeyboardModel.swift`：`@MainActor` 输入状态机（引擎、组合、候选、中英、Shift）。
+  - `KeyboardComponents.swift`：尺寸、按键、可复用候选条。
+  - `KeyboardViewController.swift`：生命周期、布局、系统输入上下文、渲染。
+- `WenshanUITests/`：宿主 App 冒烟测试。
+- `project.yml`：XcodeGen 工程定义；`.xcodeproj` 和 Info.plist 是生成物，不入库。
+
+## 数据流
+
+```
+WenshanHost
+  └─ 部署 dict.bin → App Group: group.im.wenshan.ios
+                              ├─ dict.bin
+                              └─ Data/
+                                   ├─ freq.tsv
+                                   ├─ userdict.tsv
+                                   └─ phrases.tsv
+WenshanKeyboard
+  ├─ 优先读 App Group 词表，失败回退扩展 Bundle
+  ├─ 引擎 mmap 词表，不整块复制
+  └─ 用户数据写共享目录；没有完全访问时退回扩展 Documents
+```
+
+开 `RequestsOpenAccess` 只用于写共享目录和主 App 统计；不联网、不上传。关闭完全访问时，
+基础输入仍可用，学习记录只存在键盘自己的沙箱里。
 
 ## 构建
 
@@ -31,11 +57,16 @@ sh ios/scripts/build.sh
 1. 把根目录 `dict.bin` 复制到 `ios/build/dict.bin`；
 2. 用 `gomobile bind` 生成 `ios/build/WenshanEngine.xcframework`；
 3. 用 `xcodegen` 生成 Xcode 工程；
-4. 构建模拟器 App。
+4. 用默认 ad-hoc 签名构建模拟器 App。
 
 产物在 `ios/build/DerivedData/Build/Products/Debug-iphonesimulator/WenshanHost.app`。
 
+不要给构建或测试加 `CODE_SIGNING_ALLOWED=NO`。未签名的键盘扩展没有 App Group
+entitlements，iOS 27 模拟器会把它判成无效键盘，输入时永远弹系统键盘。
+
 ## 测试
+
+宿主 App 冒烟测试：
 
 ```sh
 cd ios
@@ -44,29 +75,47 @@ xcodebuild test -project Wenshan.xcodeproj -scheme WenshanHost \
     -derivedDataPath build/DerivedData
 ```
 
-注意：跑测试**不要带 `CODE_SIGNING_ALLOWED=NO`**。未签名的键盘扩展没有
-entitlements，iOS 27 模拟器会把它判成无效键盘，输入时永远弹系统键盘。
-xcodebuild 默认的 ad-hoc 签名即可。
+键盘输入在无头模拟器里用 argent 验证：
 
-## 模拟器启用键盘
+```sh
+argent run boot-device --udid <UDID> --headless
+argent run reinstall-app --udid <UDID> --bundleId im.wenshan.ios \
+  --appPath "$PWD/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/WenshanHost.app"
+argent run launch-app --udid <UDID> --bundleId im.wenshan.ios
+```
 
-安装宿主 App 后，在模拟器设置里手动添加：
-设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → 第三方键盘 → 文山。
+CoreSimulator 每次启动会自动挂一个硬件键盘，软件键盘因此不出现。用 JXA 调
+`SimDevice.setHardwareKeyboardEnabled:keyboardType:error:` 断开它，再聚焦输入框：
 
-命令行写键盘偏好的老办法（`defaults write NSGlobalDomain AppleKeyboards`）
-在 iOS 27 模拟器上对第三方键盘失效：条目会被系统剔除，输入时仍弹系统键盘，
-只有系统自带键盘（英语/拼音）认这个设置。
+```sh
+osascript -l JavaScript -e '
+ObjC.import("Foundation");
+function run([udid, developerDir]) {
+  $.NSBundle.bundleWithPath("/Library/Developer/PrivateFrameworks/CoreSimulator.framework").load;
+  const context = $.NSClassFromString("SimServiceContext").sharedServiceContextForDeveloperDirError(developerDir, null);
+  const device = context.defaultDeviceSetWithError(null).devicesByUDID.objectForKey($.NSUUID.alloc.initWithUUIDString(udid));
+  const error = Ref();
+  device.setHardwareKeyboardEnabledKeyboardTypeError(false, 0, error);
+}' <UDID> "$(xcode-select -p)"
+```
 
-聚焦输入框后若无软件键盘弹出，是「硬件键盘」模式在拦：
-`defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false`
-后重启 SpringBoard（`launchctl stop com.apple.SpringBoard`）。
+然后在宿主 App 里启用文山键盘（设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → 第三方键盘 → 文山），
+聚焦测试输入框，用 `argent run describe` 取按键坐标或直接用可访问标识。
+
+## 内存
+
+模拟器实测（iPhone 18 Pro，iOS 27.2，Debug）：键盘扩展启动约 30 MB，
+完成一次上屏约 32 MB，收起键盘后回落到约 20 MB。词表通过 App Group 文件 mmap，
+`lsof` 确认映射的是共享容器里的 `dict.bin`，没有整块读入 Go 堆。
+
+模拟器不执行键盘扩展的 jetsam 上限。真机 Release 构建仍需用 Instruments 测冷启动、
+首次输入、100 次上屏和 10 分钟空闲；目标控制在 50 MB 以内，给系统留余量。
 
 ## 已知边界
 
-- 词表 18 MB（57 万条），直接打进扩展。真机键盘扩展的 jetsam 预算远小于模拟器，
-  上真机前要裁词表、改 App Group + mmap，并实测 RSS。
-- 还没做 App Group、用户词频/自造词落盘、九键、长按。
-- 主 App 的“引擎自检”只为验证 Go 框架在 iOS 进程里能加载词表，正式版应移除，
-  否则宿主 App 会多带一份 Go 运行时和词表访问。
-- UI 测试用坐标点击，依赖 iPhone 18 Pro 402×874 的布局；换机型要重新对坐标。
-- 键盘高度写死 270pt，横屏和 iPad 没有单独适配。
+- 还没有真机内存数据；iPad/横屏高度和字号是按档位估算，未做截图校准。
+- 还没有九宫格、长按符号、按键预览、删除长按连发、触感反馈、硬件键盘映射。
+- 用户数据只在本地；没有 iCloud/WebDAV 同步。`phrases.tsv` 目前需要手动放到
+  App Group 的 `Data/` 下，宿主还没有短语编辑器。
+- 没有 App Group 的免费签名会退回扩展自己的 Documents，主 App 看不到学习记录。
+- 词表 18 MB，仍打包在扩展 Bundle 里作为首次部署的回退；App 体积和扩展内存是两回事。

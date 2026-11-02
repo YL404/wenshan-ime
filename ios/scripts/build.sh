@@ -28,7 +28,6 @@ xcodebuild \
     -sdk iphonesimulator \
     -destination 'generic/platform=iOS Simulator' \
     -derivedDataPath build/DerivedData \
-    CODE_SIGNING_ALLOWED=NO \
     build
 
 echo

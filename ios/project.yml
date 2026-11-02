@@ -17,6 +17,7 @@ targets:
     platform: iOS
     sources:
       - path: WenshanHost
+      - path: Shared
     info:
       path: WenshanHost/Info.plist
       properties:
@@ -26,6 +27,8 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -36,11 +39,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.ios
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: WenshanHost/WenshanHost.entitlements
     dependencies:
       - target: WenshanKeyboard
         embed: true
-      - framework: build/WenshanEngine.xcframework
-        embed: false
 
   WenshanUITests:
     type: bundle.ui-testing
@@ -60,6 +62,7 @@ targets:
     platform: iOS
     sources:
       - path: WenshanKeyboard
+      - path: Shared
       - path: build/dict.bin
         buildPhase: resources
     info:
@@ -75,7 +78,7 @@ targets:
             IsASCIICapable: true
             PrefersRightToLeft: false
             PrimaryLanguage: zh-Hans
-            RequestsOpenAccess: false
+            RequestsOpenAccess: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: im.wenshan.ios.keyboard
@@ -83,6 +86,7 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
         TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: WenshanKeyboard/WenshanKeyboard.entitlements
     dependencies:
       - framework: build/WenshanEngine.xcframework
         embed: false
