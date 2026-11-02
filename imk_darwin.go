@@ -100,7 +100,8 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	if shiftDown {
 		shiftUsed = true
 	}
-	ch := firstByte(send(event, selCharacters))
+	raw := firstByte(send(event, selCharacters))
+	ch := raw
 	if ch >= 'A' && ch <= 'Z' {
 		ch += 'a' - 'A'
 	}
@@ -111,6 +112,18 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	// 带 Command/Control/Option 的组合键一律放行，交给应用自己处理。
 	if mods&(nsModCommand|nsModControl|nsModOption) != 0 {
 		return false
+	}
+	// 中文态按住 Shift 打大写字母：直接当英文上屏，不切模式。
+	// 只在没有拼音缓冲时生效：有缓冲时大写字母仍是编码的一部分，
+	// 直接当英文会悄悄丢掉正在打的词。
+	if raw >= 'A' && raw <= 'Z' && mods&nsModShift != 0 && len(eng.Buffer()) == 0 {
+		text := string(raw)
+		if needSpaceBefore(raw) {
+			text = " " + text
+		}
+		insertText(client, text)
+		prevClass = prevASCII
+		return true
 	}
 
 	keyCode := objc.Send[uintptr](event, selKeyCode)
@@ -251,7 +264,7 @@ func needSpaceBefore(ch byte) bool {
 }
 
 func isASCIIAlnum(ch byte) bool {
-	return ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'z'
+	return ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z'
 }
 
 func startsWithHan(s string) bool {

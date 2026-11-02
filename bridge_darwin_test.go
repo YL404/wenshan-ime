@@ -65,17 +65,17 @@ func TestSpacing(t *testing.T) {
 	defer func() { prevClass = prevNone }()
 
 	prevClass = prevCJK
-	if !needSpaceBefore('a') || !needSpaceBefore('9') {
+	if !needSpaceBefore('a') || !needSpaceBefore('A') || !needSpaceBefore('9') {
 		t.Fatal("中文后面接英文或数字应该补空格")
 	}
 	if needSpaceBefore(',') || needSpaceBefore(0) {
 		t.Fatal("标点和空字符不该补空格")
 	}
 	prevClass = prevASCII
-	if needSpaceBefore('a') {
+	if needSpaceBefore('a') || needSpaceBefore('A') {
 		t.Fatal("英文后面接英文不该补空格")
 	}
-	if classOf("我") != prevCJK || classOf("abc") != prevASCII || classOf("，") != prevNone || classOf("") != prevNone {
+	if classOf("我") != prevCJK || classOf("abc") != prevASCII || classOf("API") != prevASCII || classOf("，") != prevNone || classOf("") != prevNone {
 		t.Fatal("classOf 分类不对")
 	}
 }
