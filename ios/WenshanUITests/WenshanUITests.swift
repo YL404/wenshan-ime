@@ -12,8 +12,8 @@ final class WenshanUITests: XCTestCase {
         addScreenshot("聚焦后")
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        // 键盘窗口高 270pt，屏幕底部还留系统地球/麦克风行。
-        // 按窗口内 frame + 截图校准：q 0.697，a 0.759，z 0.822，空格 0.884。
+        // 底行六键（🌐 ⇧ 符 空格 ⌫ 换行），空格在第 4 位：0.5817, 0.8856。
+        // 字母三行行位与旧版一致：w 0.697，a 行 0.759，z 行 0.822。
         let keys: [(CGFloat, CGFloat)] = [
             (0.1567, 0.697), // w
             (0.8433, 0.697), // o
@@ -26,8 +26,7 @@ final class WenshanUITests: XCTestCase {
         }
         addScreenshot("输入 womf 后")
 
-        // 空格：有候选时选第一个。
-        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3777, dy: 0.884)).tap()
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5817, dy: 0.8856)).tap()
         sleep(1)
         addScreenshot("上屏后")
 

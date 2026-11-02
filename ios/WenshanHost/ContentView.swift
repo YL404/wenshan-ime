@@ -38,9 +38,17 @@ struct ContentView: View {
     /// 主 App 和键盘扩展是两个进程，这里读的是扩展 Bundle 里的词表，
     /// 只用来确认 Go 框架在 iOS 上能加载、能出候选。
     private func checkEngine() {
-        let path = Bundle.main.bundlePath + "/PlugIns/WenshanKeyboard.appex/dict.bin"
+        guard let appexURL = Bundle.main.builtInPlugInsURL?.appendingPathComponent("WenshanKeyboard.appex") else {
+            engineStatus = "找不到扩展 Bundle"
+            return
+        }
+        let path = appexURL.appendingPathComponent("dict.bin").path
         guard FileManager.default.fileExists(atPath: path) else {
             engineStatus = "找不到扩展里的 dict.bin"
+            return
+        }
+        guard MobileOpen(path) else {
+            engineStatus = "打开失败: \(MobileLastError())"
             return
         }
         guard MobileOpen(path) else {
