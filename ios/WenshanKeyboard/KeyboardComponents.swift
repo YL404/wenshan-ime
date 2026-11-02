@@ -42,12 +42,26 @@ struct KeyboardMetrics {
     }
 }
 
+/// 键盘底色交给 UIInputView 的系统材质，按键只补灰阶层级：
+/// 字母键比底色亮，功能键介于两者之间，深色模式不会出现灰底垫黑键。
+enum KeyboardPalette {
+    static let key = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .systemGray3 : .systemBackground
+    }
+    static let functionKey = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .systemGray4 : .secondarySystemBackground
+    }
+    static let pressed = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .systemGray2 : .systemGray4
+    }
+}
+
 /// 普通按键。按下时改变背景色，Shift/中英键可切成蓝色激活态。
 final class KeyButton: UIButton {
     private let normalBackground: UIColor
     private var active = false
 
-    init(title: String, identifier: String, font: UIFont, background: UIColor = .systemBackground) {
+    init(title: String, identifier: String, font: UIFont, background: UIColor = KeyboardPalette.key) {
         normalBackground = background
         super.init(frame: .zero)
         setTitle(title, for: .normal)
@@ -69,7 +83,7 @@ final class KeyButton: UIButton {
 
     override var isHighlighted: Bool {
         didSet {
-            backgroundColor = isHighlighted ? .systemGray4 : (active ? .systemBlue : normalBackground)
+            backgroundColor = isHighlighted ? KeyboardPalette.pressed : (active ? .systemBlue : normalBackground)
         }
     }
 

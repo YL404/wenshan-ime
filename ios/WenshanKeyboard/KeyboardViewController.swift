@@ -89,7 +89,6 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - UI
 
     private func buildUI() {
-        view.backgroundColor = .systemGray5
         metrics = currentMetrics()
 
         heightConstraint = view.heightAnchor.constraint(equalToConstant: metrics.totalHeight)
@@ -249,7 +248,7 @@ final class KeyboardViewController: UIInputViewController {
                 self.model.shiftTapped()
                 self.render()
             },
-            background: .secondarySystemBackground)
+            background: KeyboardPalette.functionKey)
         shift.accessibilityLabel = "大写"
         shiftButton = shift
 
@@ -271,7 +270,7 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.backspace())
             },
-            background: .secondarySystemBackground)
+            background: KeyboardPalette.functionKey)
         delete.accessibilityLabel = "删除"
 
         let sideWidth = metrics.letterWidth * 1.3
@@ -283,7 +282,7 @@ final class KeyboardViewController: UIInputViewController {
             title: "123",
             identifier: "key_symbols",
             action: { [weak self] in self?.toggleSymbols() },
-            background: .secondarySystemBackground,
+            background: KeyboardPalette.functionKey,
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         numbers.accessibilityLabel = "数字和符号"
 
@@ -298,7 +297,6 @@ final class KeyboardViewController: UIInputViewController {
                 }
                 self.apply(self.model.punctuate("."))
             },
-            background: .systemBackground,
             font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
         punctuation.titleLabel?.numberOfLines = 2
         punctuation.titleLabel?.textAlignment = .center
@@ -314,7 +312,6 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.toggleMode())
             },
-            background: .systemBackground,
             font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
         mode.titleLabel?.numberOfLines = 2
         mode.titleLabel?.textAlignment = .center
@@ -328,7 +325,6 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.space())
             },
-            background: .systemBackground,
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         space.accessibilityLabel = "空格"
 
@@ -339,7 +335,7 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.returnKey())
             },
-            background: .secondarySystemBackground,
+            background: KeyboardPalette.functionKey,
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         returnKey.accessibilityLabel = "换行"
         returnButton = returnKey
@@ -359,7 +355,7 @@ final class KeyboardViewController: UIInputViewController {
             title: "ABC",
             identifier: "key_letters",
             action: { [weak self] in self?.toggleSymbols() },
-            background: .secondarySystemBackground,
+            background: KeyboardPalette.functionKey,
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         letters.accessibilityLabel = "字母"
 
@@ -370,7 +366,6 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.toggleMode())
             },
-            background: .systemBackground,
             font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
         mode.titleLabel?.numberOfLines = 2
         mode.titleLabel?.textAlignment = .center
@@ -384,7 +379,6 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.space())
             },
-            background: .systemBackground,
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         space.accessibilityLabel = "空格"
 
@@ -395,7 +389,7 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.backspace())
             },
-            background: .secondarySystemBackground)
+            background: KeyboardPalette.functionKey)
         delete.accessibilityLabel = "删除"
 
         let returnKey = makeKey(
@@ -405,7 +399,7 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.returnKey())
             },
-            background: .secondarySystemBackground,
+            background: KeyboardPalette.functionKey,
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         returnKey.accessibilityLabel = "换行"
         returnButton = returnKey
@@ -424,7 +418,7 @@ final class KeyboardViewController: UIInputViewController {
         title: String,
         identifier: String,
         action: @escaping () -> Void,
-        background: UIColor = .systemBackground,
+        background: UIColor = KeyboardPalette.key,
         font: UIFont? = nil
     ) -> KeyButton {
         let button = KeyButton(
