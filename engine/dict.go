@@ -227,13 +227,26 @@ func (d *Dict) Short(letter byte) []Candidate {
 	return out
 }
 
-// exactWeight 返回编码恰好等于 code 的条目的最高权重。
+// isAuxEntry 报告一个词条是不是单字辅码。词编码每个音节两键，单字只有
+// 两键编码；更长的单字编码都是辅码，不能当词组参与组句。
+func isAuxEntry(text string, codeLen int) bool {
+	return codeLen > 2 && utf8.RuneCountInString(text) == 1
+}
+
+// exactWeight 返回编码恰好等于 code 的真实词最高权重。辅码单字不算词：
+// 否则组句会把 buvdl 里的 vdly 当成「装」，把末尾的 l 吃掉。
 func (d *Dict) exactWeight(code []byte) (uint32, bool) {
-	i := d.lowerBound(code)
-	if i >= d.n || !bytes.Equal(d.code(i), code) {
-		return 0, false
+	for i := d.lowerBound(code); i < d.n; i++ {
+		c := d.code(i)
+		if !bytes.Equal(c, code) {
+			break
+		}
+		if isAuxEntry(string(d.text(i)), len(c)) {
+			continue
+		}
+		return d.weight(i), true
 	}
-	return d.weight(i), true
+	return 0, false
 }
 
 // altText 是同一编码下的一种写法。
@@ -242,14 +255,19 @@ type altText struct {
 	weight uint32
 }
 
-// exactAlts 返回编码恰好等于 code 的前 n 种写法，权重从高到低。
+// exactAlts 返回编码恰好等于 code 的前 n 种真实词写法，权重从高到低。
 func (d *Dict) exactAlts(code []byte, n int) []altText {
 	var out []altText
 	for i := d.lowerBound(code); i < d.n && len(out) < n; i++ {
-		if !bytes.Equal(d.code(i), code) {
+		c := d.code(i)
+		if !bytes.Equal(c, code) {
 			break
 		}
-		out = append(out, altText{text: string(d.text(i)), weight: d.weight(i)})
+		text := string(d.text(i))
+		if isAuxEntry(text, len(c)) {
+			continue
+		}
+		out = append(out, altText{text: text, weight: d.weight(i)})
 	}
 	return out
 }

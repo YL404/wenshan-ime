@@ -700,6 +700,32 @@ func TestComposeTrailingInitial(t *testing.T) {
 	}
 }
 
+// 末尾声母补全时不能把辅码单字当成一个音节：buvdl 里的 vdly 是「装」的
+// 辅码，不是「装 + ling」，否则会拼出「不装」而不是「不装了」。
+func TestComposeSkipsAux(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "bu", Text: "不", Weight: 20000000},
+		{Code: "vd", Text: "装", Weight: 1000000},
+		{Code: "buvd", Text: "不装", Weight: 500000},
+		{Code: "vdly", Text: "装", Weight: 1000000},
+		{Code: "vdle", Text: "装了", Weight: 500000},
+		{Code: "le", Text: "了", Weight: 1400000},
+	})
+	e := New(d)
+	for _, ch := range []byte("buvdl") {
+		e.Type(ch)
+	}
+	got := e.Candidates()
+	if len(got) == 0 || got[0].Text != "不装了" {
+		t.Fatalf("buvdl 候选 = %v", got)
+	}
+	for _, c := range got {
+		if c.Text == "不装" && c.CodeLen == 5 {
+			t.Errorf("辅码把末尾 l 吃掉了: %v", got)
+		}
+	}
+}
+
 // 末尾多着声母键时，覆盖按键多的前缀词要排在覆盖少的高频单字前面。
 func TestOddTailRanking(t *testing.T) {
 	d := buildDict(t, []Entry{
