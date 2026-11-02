@@ -7,31 +7,38 @@ struct KeyboardMetrics {
     let gap: CGFloat
     let keyFontSize: CGFloat
     let candidateFontSize: CGFloat
+    let letterWidth: CGFloat
 
     static func make(screen: CGSize, isPad: Bool) -> KeyboardMetrics {
         let landscape = screen.width > screen.height
+        let gap: CGFloat = isPad ? 6 : (landscape ? 5 : 5)
+        let contentWidth = max(0, screen.width - 12)
+        let letterWidth = max(26, (contentWidth - 9 * gap) / 10)
         if isPad {
             return KeyboardMetrics(
                 totalHeight: landscape ? 300 : 280,
                 candidateHeight: 44,
-                gap: 6,
+                gap: gap,
                 keyFontSize: 24,
-                candidateFontSize: 22)
+                candidateFontSize: 22,
+                letterWidth: letterWidth)
         }
         if landscape {
             return KeyboardMetrics(
                 totalHeight: 200,
                 candidateHeight: 34,
-                gap: 5,
+                gap: gap,
                 keyFontSize: 19,
-                candidateFontSize: 18)
+                candidateFontSize: 18,
+                letterWidth: letterWidth)
         }
         return KeyboardMetrics(
             totalHeight: 260,
             candidateHeight: 40,
-            gap: 5,
+            gap: gap,
             keyFontSize: 23,
-            candidateFontSize: 20)
+            candidateFontSize: 20,
+            letterWidth: letterWidth)
     }
 }
 
@@ -46,6 +53,8 @@ final class KeyButton: UIButton {
         setTitle(title, for: .normal)
         setTitleColor(.label, for: .normal)
         titleLabel?.font = font
+        titleLabel?.adjustsFontSizeToFitWidth = true
+        titleLabel?.minimumScaleFactor = 0.6
         backgroundColor = background
         layer.cornerRadius = 7
         layer.cornerCurve = .continuous

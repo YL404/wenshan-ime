@@ -16,6 +16,8 @@ final class KeyboardViewController: UIInputViewController {
     private var shiftButton: KeyButton?
     private var modeButton: KeyButton?
     private var returnButton: KeyButton?
+    private var punctuationButton: KeyButton?
+    private var punctuationLongPressUsed = false
     private var symbolsOn = false
     private var hasMarkedText = false
     private var isApplyingText = false
@@ -148,6 +150,7 @@ final class KeyboardViewController: UIInputViewController {
             || next.gap != metrics.gap
             || next.keyFontSize != metrics.keyFontSize
             || next.candidateFontSize != metrics.candidateFontSize
+            || next.letterWidth != metrics.letterWidth
         else { return }
         metrics = next
         heightConstraint.constant = next.totalHeight
@@ -165,6 +168,8 @@ final class KeyboardViewController: UIInputViewController {
         shiftButton = nil
         modeButton = nil
         returnButton = nil
+        punctuationButton = nil
+        punctuationLongPressUsed = false
 
         if symbolsOn {
             for row in symbolRows {
@@ -192,20 +197,46 @@ final class KeyboardViewController: UIInputViewController {
                                 guard let self else { return }
                                 self.apply(self.model.type(String(character)))
                             })
-                    }))
+                    }, margin: index == 1 ? metrics.letterWidth / 2 : 0))
                 }
             }
             keyboardStack.addArrangedSubview(makeLetterFunctionRow())
         }
     }
 
-    private func makeRow(_ keys: [KeyButton]) -> UIStackView {
+    private func makeRow(_ keys: [KeyButton], margin: CGFloat = 0) -> UIStackView {
         let row = UIStackView(arrangedSubviews: keys)
         row.axis = .horizontal
         row.spacing = metrics.gap
         row.distribution = .fillEqually
         row.alignment = .fill
         row.translatesAutoresizingMaskIntoConstraints = false
+        if margin > 0 {
+            row.isLayoutMarginsRelativeArrangement = true
+            row.directionalLayoutMargins = NSDirectionalEdgeInsets(
+                top: 0, leading: margin, bottom: 0, trailing: margin)
+        }
+        return row
+    }
+
+    /// 固定宽度键 + 可伸缩键。用于底行和 Z 行的宽 Shift/删除。
+    private func makeProportionalRow(_ items: [(UIView, CGFloat?)]) -> UIStackView {
+        let row = UIStackView(arrangedSubviews: items.map { $0.0 })
+        row.axis = .horizontal
+        row.spacing = metrics.gap
+        row.distribution = .fill
+        row.alignment = .fill
+        row.translatesAutoresizingMaskIntoConstraints = false
+        for (view, width) in items {
+            if let width {
+                view.widthAnchor.constraint(equalToConstant: width).isActive = true
+                view.setContentHuggingPriority(.required, for: .horizontal)
+                view.setContentCompressionResistancePriority(.required, for: .horizontal)
+            } else {
+                view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            }
+        }
         return row
     }
 
@@ -222,16 +253,17 @@ final class KeyboardViewController: UIInputViewController {
         shift.accessibilityLabel = "大写"
         shiftButton = shift
 
-        var keys: [KeyButton] = [shift]
-        for character in row {
-            keys.append(makeKey(
+        let letters = row.map { character in
+            makeKey(
                 title: String(character),
                 identifier: "key_\(character)",
                 action: { [weak self] in
                     guard let self else { return }
                     self.apply(self.model.type(String(character)))
-                }))
+                })
         }
+        let lettersRow = makeRow(letters)
+
         let delete = makeKey(
             title: "⌫",
             identifier: "key_delete",
@@ -241,26 +273,52 @@ final class KeyboardViewController: UIInputViewController {
             },
             background: .secondarySystemBackground)
         delete.accessibilityLabel = "删除"
-        keys.append(delete)
-        return makeRow(keys)
+
+        let sideWidth = metrics.letterWidth * 1.3
+        return makeProportionalRow([(shift, sideWidth), (lettersRow, nil), (delete, sideWidth)])
     }
 
     private func makeLetterFunctionRow() -> UIStackView {
-        let symbols = makeKey(
-            title: "符",
+        let numbers = makeKey(
+            title: "123",
             identifier: "key_symbols",
             action: { [weak self] in self?.toggleSymbols() },
-            background: .secondarySystemBackground)
-        symbols.accessibilityLabel = "符号"
+            background: .secondarySystemBackground,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
+        numbers.accessibilityLabel = "数字和符号"
+
+        let punctuation = makeKey(
+            title: "。\n，",
+            identifier: "key_punctuation",
+            action: { [weak self] in
+                guard let self else { return }
+                if self.punctuationLongPressUsed {
+                    self.punctuationLongPressUsed = false
+                    return
+                }
+                let text = self.model.mode == .chinese ? "。" : "."
+                self.apply(self.model.insert(text))
+            },
+            background: .systemBackground,
+            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
+        punctuation.titleLabel?.numberOfLines = 2
+        punctuation.titleLabel?.textAlignment = .center
+        punctuation.accessibilityLabel = "句号，长按逗号"
+        punctuation.addGestureRecognizer(UILongPressGestureRecognizer(
+            target: self, action: #selector(handlePunctuationLongPress(_:))))
+        punctuationButton = punctuation
 
         let mode = makeKey(
-            title: "中",
+            title: "中\n英",
             identifier: "key_mode",
             action: { [weak self] in
                 guard let self else { return }
                 self.apply(self.model.toggleMode())
             },
-            background: .secondarySystemBackground)
+            background: .systemBackground,
+            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
+        mode.titleLabel?.numberOfLines = 2
+        mode.titleLabel?.textAlignment = .center
         mode.accessibilityLabel = "切换中英文"
         modeButton = mode
 
@@ -271,7 +329,8 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.space())
             },
-            background: .secondarySystemBackground)
+            background: .systemBackground,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         space.accessibilityLabel = "空格"
 
         let returnKey = makeKey(
@@ -281,11 +340,19 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.returnKey())
             },
-            background: .secondarySystemBackground)
+            background: .secondarySystemBackground,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         returnKey.accessibilityLabel = "换行"
         returnButton = returnKey
 
-        return makeRow([symbols, mode, space, returnKey])
+        let unit = metrics.letterWidth
+        return makeProportionalRow([
+            (numbers, unit * 1.15),
+            (punctuation, unit * 0.65),
+            (space, nil),
+            (mode, unit),
+            (returnKey, unit * 1.15),
+        ])
     }
 
     private func makeSymbolBottomRow() -> UIStackView {
@@ -293,17 +360,21 @@ final class KeyboardViewController: UIInputViewController {
             title: "ABC",
             identifier: "key_letters",
             action: { [weak self] in self?.toggleSymbols() },
-            background: .secondarySystemBackground)
+            background: .secondarySystemBackground,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         letters.accessibilityLabel = "字母"
 
         let mode = makeKey(
-            title: "中",
+            title: "中\n英",
             identifier: "key_mode",
             action: { [weak self] in
                 guard let self else { return }
                 self.apply(self.model.toggleMode())
             },
-            background: .secondarySystemBackground)
+            background: .systemBackground,
+            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
+        mode.titleLabel?.numberOfLines = 2
+        mode.titleLabel?.textAlignment = .center
         mode.accessibilityLabel = "切换中英文"
         modeButton = mode
 
@@ -314,7 +385,8 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.space())
             },
-            background: .secondarySystemBackground)
+            background: .systemBackground,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         space.accessibilityLabel = "空格"
 
         let delete = makeKey(
@@ -334,23 +406,32 @@ final class KeyboardViewController: UIInputViewController {
                 guard let self else { return }
                 self.apply(self.model.returnKey())
             },
-            background: .secondarySystemBackground)
+            background: .secondarySystemBackground,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)))
         returnKey.accessibilityLabel = "换行"
         returnButton = returnKey
 
-        return makeRow([letters, mode, space, delete, returnKey])
+        let unit = metrics.letterWidth
+        return makeProportionalRow([
+            (letters, unit * 1.15),
+            (mode, unit),
+            (space, nil),
+            (delete, unit),
+            (returnKey, unit * 1.15),
+        ])
     }
 
     private func makeKey(
         title: String,
         identifier: String,
         action: @escaping () -> Void,
-        background: UIColor = .systemBackground
+        background: UIColor = .systemBackground,
+        font: UIFont? = nil
     ) -> KeyButton {
         let button = KeyButton(
             title: title,
             identifier: identifier,
-            font: .systemFont(ofSize: metrics.keyFontSize),
+            font: font ?? .systemFont(ofSize: metrics.keyFontSize),
             background: background)
         button.addAction(UIAction { _ in action() }, for: .touchUpInside)
         return button
@@ -440,10 +521,20 @@ final class KeyboardViewController: UIInputViewController {
     private func updateKeys() {
         shiftButton?.setTitle(model.shift == .locked ? "⇪" : "⇧", for: .normal)
         shiftButton?.setActive(model.shift.isActive)
-        modeButton?.setTitle(model.mode == .chinese ? "中" : "EN", for: .normal)
         modeButton?.setActive(model.mode == .english)
+        punctuationButton?.setTitle(model.mode == .chinese ? "。\n，" : ".\n,", for: .normal)
         returnButton?.setTitle(model.returnKeyTitle, for: .normal)
         returnButton?.accessibilityLabel = model.returnKeyTitle
+    }
+
+    @objc private func handlePunctuationLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else {
+            if gesture.state == .ended { punctuationLongPressUsed = false }
+            return
+        }
+        punctuationLongPressUsed = true
+        let text = model.mode == .chinese ? "，" : ","
+        apply(model.insert(text))
     }
 
     private func toggleSymbols() {
