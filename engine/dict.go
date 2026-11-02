@@ -128,6 +128,17 @@ func candidateScore(weight uint32, codeLen, bufLen int) int64 {
 	return tier<<40 | int64(weight)
 }
 
+// lookupScore 是词表条目的分数。三键编码只可能来自单字辅码（词的编码都是
+// 偶数），它不是一个打完的词，按「词还没打完」处理，让真实词组按词频和它
+// 竞争：打 tmj 时「添加」要排在「钿」前面，而高频字「的」（deb）仍然靠
+// 权重留在前面。
+func lookupScore(weight uint32, codeLen, bufLen int) int64 {
+	if codeLen == 3 && bufLen == 3 {
+		return int64(tierLong)<<40 | int64(weight)
+	}
+	return candidateScore(weight, codeLen, bufLen)
+}
+
 // Lookup 返回输入缓冲的候选。两种来源合并：
 //
 //   - 编码以缓冲开头的词（还没打完，例如 nih 时的「你好」）；
@@ -163,7 +174,7 @@ func (d *Dict) prefixInto(best []Candidate, prefix []byte, limit int) []Candidat
 		best = insertCandidate(best, Candidate{
 			Text:    string(d.text(i)),
 			CodeLen: len(code),
-			score:   candidateScore(d.weight(i), len(code), len(prefix)),
+			score:   lookupScore(d.weight(i), len(code), len(prefix)),
 		}, limit)
 	}
 	return best
@@ -179,7 +190,7 @@ func (d *Dict) exactInto(best []Candidate, code []byte, bufLen, limit int) []Can
 		best = insertCandidate(best, Candidate{
 			Text:    string(d.text(i)),
 			CodeLen: len(code),
-			score:   candidateScore(d.weight(i), len(code), bufLen),
+			score:   lookupScore(d.weight(i), len(code), bufLen),
 		}, limit)
 	}
 	return best

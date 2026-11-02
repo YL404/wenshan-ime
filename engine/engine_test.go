@@ -250,6 +250,45 @@ func TestAuxRanking(t *testing.T) {
 	}
 }
 
+// 三键既可能是单字辅码，也可能是下一个音节的声母。真实词组要按词频排在
+// 生僻的辅码单字前面，但高频字（的）仍然能靠权重留在首位。
+func TestAuxDoesNotOutrankWord(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "tm", Text: "天", Weight: 6000000},
+		{Code: "tmj", Text: "钿", Weight: 1000},
+		{Code: "tmjt", Text: "钿", Weight: 1000},
+		{Code: "tmjw", Text: "添加", Weight: 500000},
+		{Code: "tmjw", Text: "天价", Weight: 50000},
+		{Code: "xm", Text: "先", Weight: 1600000},
+		{Code: "xmz", Text: "暹", Weight: 2800},
+		{Code: "xmzl", Text: "现在", Weight: 503000},
+		{Code: "de", Text: "的", Weight: 76000000},
+		{Code: "deb", Text: "的", Weight: 76000000},
+		{Code: "debu", Text: "的", Weight: 76000000},
+		{Code: "debu", Text: "底部", Weight: 149000},
+	})
+	e := New(d)
+	typeCode := func(s string) {
+		e.Reset()
+		for _, ch := range []byte(s) {
+			e.Type(ch)
+		}
+	}
+	for _, c := range []struct {
+		code string
+		want string
+	}{
+		{"tmj", "添加"},
+		{"xmz", "现在"},
+		{"deb", "的"},
+	} {
+		typeCode(c.code)
+		if got := e.Candidates(); len(got) == 0 || got[0].Text != c.want {
+			t.Errorf("%s 候选 = %v, 期望 %q 在首位", c.code, got, c.want)
+		}
+	}
+}
+
 // 单键候选只取两键单字，辅码条目不能把同一个字重复塞进简码表。
 func TestShortListsExcludeAux(t *testing.T) {
 	entries := []Entry{
