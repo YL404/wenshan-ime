@@ -58,6 +58,11 @@ var (
 	// 只信自己的状态，不去问应用：问一次要几个同步往返，是毫秒级开销。
 	prevClass int
 
+	// inlineText 是中文态按 Shift+大写切出来的临时英文串。它不进引擎，
+	// 预编辑直接显示原文；空格/回车结束，退格/Esc 可改。
+	inlineText  string
+	inlineSpace bool
+
 	// 光标位置在一个组合里不会变（预编辑串只会往右长），所以每次组合只查一次：
 	// 刚 setMarkedText 完就查要等前台应用排版，是这条路径上最贵的一步。
 	candCaret  NSRect
@@ -85,8 +90,8 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	typ := send(event, selEventType)
 	mods := objc.Send[uintptr](event, selModifierFlags)
 	if debugKeys {
-		logf("key type=%d code=%d mods=%#x ascii=%v buf=%q",
-			typ, objc.Send[uintptr](event, selKeyCode), mods, asciiMode, eng.Buffer())
+		logf("key type=%d code=%d mods=%#x ascii=%v buf=%q inline=%q",
+			typ, objc.Send[uintptr](event, selKeyCode), mods, asciiMode, eng.Buffer(), inlineText)
 	}
 
 	if typ == nsEventTypeFlagsChanged {
@@ -113,10 +118,46 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	if mods&(nsModCommand|nsModControl|nsModOption) != 0 {
 		return false
 	}
-	// 中文态按住 Shift 打大写字母：直接当英文上屏，不切模式。
-	// 只在没有拼音缓冲时生效：有缓冲时大写字母仍是编码的一部分，
-	// 直接当英文会悄悄丢掉正在打的词。
-	if raw >= 'A' && raw <= 'Z' && mods&nsModShift != 0 && len(eng.Buffer()) == 0 {
+	keyCode := objc.Send[uintptr](event, selKeyCode)
+
+	// 临时英文串：字母原样追加，空格/回车结束，退格/Esc 可改。
+	// 其他键先把这段英文上屏，再按普通按键继续处理。
+	if inlineText != "" {
+		switch {
+		case raw >= 'a' && raw <= 'z' || raw >= 'A' && raw <= 'Z':
+			inlineText += string(raw)
+			showInline(client)
+			return true
+		case keyCode == keyCodeSpace:
+			commitInline(client, true)
+			return true
+		case keyCode == keyCodeReturn || keyCode == keyCodeKeypadEnter:
+			commitInline(client, false)
+			prevClass = prevNone // 回车结束不补空格，后面紧接中文也不自动加
+			return true
+		case keyCode == keyCodeDelete:
+			inlineText = inlineText[:len(inlineText)-1]
+			if inlineText == "" {
+				cancelInline(client)
+			} else {
+				showInline(client)
+			}
+			return true
+		case keyCode == keyCodeEscape:
+			cancelInline(client)
+			return true
+		default:
+			commitInline(client, false)
+		}
+	}
+
+	// 中文态按住 Shift 打大写字母：没有缓冲时直接上屏；
+	// 正在打拼音时把已打的编码接进临时英文串，再从这字母继续。
+	if raw >= 'A' && raw <= 'Z' && mods&nsModShift != 0 {
+		if len(eng.Buffer()) > 0 {
+			startInline(client, raw)
+			return true
+		}
 		text := string(raw)
 		if needSpaceBefore(raw) {
 			text = " " + text
@@ -125,8 +166,6 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 		prevClass = prevASCII
 		return true
 	}
-
-	keyCode := objc.Send[uintptr](event, selKeyCode)
 	// Shift+空格：全角/半角标点切换。
 	if keyCode == keyCodeSpace && mods&nsModShift != 0 {
 		fullWidth = !fullWidth
@@ -247,6 +286,65 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	return false
 }
 
+// startInline 把当前拼音缓冲转成临时英文串，并接上触发的大写字母。
+// prevClass 保持到提交时再更新，这样取消后仍能正确判断中英边界。
+func startInline(client objc.ID, ch byte) {
+	inlineText = string(eng.Buffer()) + string(ch)
+	inlineSpace = prevClass == prevCJK
+	eng.Reset()
+	caretValid = false
+	hideCandidates()
+	showInline(client)
+}
+
+// showInline 只刷新预编辑串，候选窗在切进临时英文时已经收起。
+func showInline(client objc.ID) {
+	if inlineText == "" {
+		clearMarked(client)
+		return
+	}
+	ns := nsString(inlineText)
+	if clientCan(client, selSetMarkedText) {
+		send(client, selSetMarkedText, ns, uintptr(len(inlineText)), 0, nsNotFound, 0)
+	}
+	send(ns, selRelease)
+}
+
+// commitInline 把临时英文串上屏。空格结束补一个空格；回车结束不补，
+// 方便后面直接紧跟中文（例如 iOS版、iPhone手机）。
+func commitInline(client objc.ID, trailingSpace bool) {
+	if inlineText == "" {
+		return
+	}
+	text := inlineText
+	if inlineSpace {
+		text = " " + text
+	}
+	if trailingSpace {
+		text += " "
+	}
+	inlineText = ""
+	inlineSpace = false
+	caretValid = false
+	if client != 0 {
+		insertText(client, text)
+	}
+	if trailingSpace {
+		prevClass = prevNone
+	} else {
+		prevClass = prevASCII
+	}
+	hideCandidates()
+}
+
+func cancelInline(client objc.ID) {
+	inlineText = ""
+	inlineSpace = false
+	caretValid = false
+	clearMarked(client)
+	hideCandidates()
+}
+
 // spaceBeforeASCII 在「中文紧挨着英文/数字」时补一个空格。
 func spaceBeforeASCII(client objc.ID, ch byte) {
 	if !needSpaceBefore(ch) {
@@ -308,6 +406,9 @@ func handleFlags(mods, keyCode uintptr, self objc.ID) {
 // toggleAscii 在中文/英文直通之间切换。切到英文时把没上屏的拼音按原样打出去，
 // 和 Rime 的行为一致。
 func toggleAscii(self objc.ID) {
+	if inlineText != "" {
+		commitInline(curClient, false)
+	}
 	asciiMode = !asciiMode
 	caretValid = false
 	logf("mode: ascii=%v", asciiMode)
@@ -332,6 +433,8 @@ func toggleAscii(self objc.ID) {
 
 func activateServer(self objc.ID, cmd objc.SEL, sender objc.ID) {
 	eng.Reset()
+	inlineText = ""
+	inlineSpace = false
 	caretValid = false
 	prevClass = prevNone
 	shiftDown, shiftUsed = false, false
@@ -371,6 +474,9 @@ func recognizedEvents(self objc.ID, cmd objc.SEL, sender objc.ID) uint {
 func finishInput(client objc.ID) {
 	if client == 0 {
 		client = curClient
+	}
+	if inlineText != "" {
+		commitInline(client, false)
 	}
 	if text, ok := eng.Select(0); ok && client != 0 {
 		insertText(client, text)
