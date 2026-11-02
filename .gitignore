@@ -7,3 +7,6 @@ ios/build/
 ios/Wenshan.xcodeproj/
 ios/WenshanHost/Info.plist
 ios/WenshanKeyboard/Info.plist
+
+# 本地 agent skill 软链，指向本机路径
+.agents/
