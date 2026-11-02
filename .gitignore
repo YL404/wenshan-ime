@@ -1,3 +1,9 @@
 build/
 dict.bin
 .DS_Store
+
+# iOS 生成物
+ios/build/
+ios/Wenshan.xcodeproj/
+ios/WenshanHost/Info.plist
+ios/WenshanKeyboard/Info.plist
