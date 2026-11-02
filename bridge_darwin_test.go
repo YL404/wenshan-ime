@@ -61,6 +61,12 @@ func TestPunctuate(t *testing.T) {
 	if _, ok := punctuate('-'); ok {
 		t.Fatal("减号不该被替换")
 	}
+	// 顿号在社区配置里通常同时接受 / 和 \，只留 \ 不容易发现。
+	for _, ch := range []byte{'/', '\\'} {
+		if s, ok := punctuate(ch); !ok || s != "、" {
+			t.Errorf("顿号键 %q = %q, %v", ch, s, ok)
+		}
+	}
 }
 
 func TestSpacing(t *testing.T) {
