@@ -18,6 +18,7 @@ import (
 	"github.com/ebitengine/purego/objc"
 
 	"wenshan/engine"
+	"wenshan/input"
 )
 
 // dict.bin 由 cmd/dictgen 从 Rime 词库生成，跟着可执行文件一起映射进内存，
@@ -53,10 +54,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("词表: %v", err)
 	}
-	eng = engine.New(dict)
+	eng := engine.New(dict)
 	eng.SetFreq(engine.LoadFreq(freqPath()))
 	eng.SetUserDict(engine.LoadUserDict(userDictPath()))
 	eng.SetPhrases(engine.LoadUserDict(phrasesPath()))
+	sess = input.New(eng)
 
 	app := send(objc.ID(objc.GetClass("NSApplication")), selSharedApplication)
 	if app == 0 {

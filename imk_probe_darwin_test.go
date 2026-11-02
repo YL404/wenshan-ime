@@ -9,6 +9,7 @@ import (
 	"github.com/ebitengine/purego/objc"
 
 	"wenshan/engine"
+	"wenshan/input"
 )
 
 // 注册一个 IMKInputController 实例，直接朝它发消息验证事件路径：
@@ -34,7 +35,7 @@ func TestControllerContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng = engine.New(dict)
+	sess = input.New(engine.New(dict))
 
 	if err := registerController(); err != nil {
 		t.Fatal(err)
@@ -70,14 +71,14 @@ func TestControllerContract(t *testing.T) {
 	}
 
 	handled := objc.Send[bool](ctl, objc.RegisterName("handleEvent:client:"), event, ctl)
-	t.Logf("handleEvent 'n' -> %v, buf=%q cands=%d", handled, eng.Buffer(), len(eng.Candidates()))
+	t.Logf("handleEvent 'n' -> %v, buf=%q cands=%d", handled, sess.Buffer(), len(sess.Candidates()))
 	if !handled {
 		t.Fatal("字母键没被消费")
 	}
-	if string(eng.Buffer()) != "n" {
-		t.Fatalf("缓冲 = %q", eng.Buffer())
+	if sess.Buffer() != "n" {
+		t.Fatalf("缓冲 = %q", sess.Buffer())
 	}
-	if len(eng.Candidates()) == 0 {
+	if len(sess.Candidates()) == 0 {
 		t.Fatal("没有候选")
 	}
 }

@@ -1,20 +1,25 @@
 import Foundation
 import WenshanEngine
 
-/// gomobile 桥的 Swift 门面：跨语言调用收在这一处。
-///
-/// 一次「按键/选词/翻页」只跨一次语言边界，直接返回组合状态
-/// （缓冲 + 当前页候选），不再像旧版那样每个动作跨两三次边界拼状态。
-struct ComposingState: Equatable {
-    /// 当前拼音缓冲，用于 marked text。
-    var buffer: String
+/// 规则层一次动作的结果。Swift 侧只认这个结构，不直接碰 gomobile 生成的类。
+struct BridgeOutcome: Equatable {
+    /// 要插入正文的文本，已经包含自动补的空格。
+    var text: String
+    /// 预编辑串：临时英文或拼音缓冲。
+    var preedit: String
     /// 当前页候选。
     var candidates: [String]
+    /// false 表示规则层没消费这个键，Swift 侧按原键处理。
+    var consumed: Bool
+    /// 0 中文，1 英文。
+    var mode: Int
+    var fullWidth: Bool
 
-    static let empty = ComposingState(buffer: "", candidates: [])
+    static let empty = BridgeOutcome(
+        text: "", preedit: "", candidates: [], consumed: false, mode: 0, fullWidth: true)
 }
 
-/// gomobile 桥的 Swift 门面。所有引擎调用都从主线程进来；
+/// gomobile 桥的 Swift 门面。所有引擎和规则调用都从主线程进来；
 /// 词表 mmap 由 Go 侧加锁，后台线程读词表也安全。
 enum WenshanBridge {
     /// 打开词表并建立引擎。优先用主 App 部署到 App Group 的词表；
@@ -51,40 +56,95 @@ enum WenshanBridge {
         MobileClose()
     }
 
-    /// 追加一个或多个 ASCII 按键，返回按键后的组合状态。
-    static func type(_ keys: String) -> ComposingState {
-        state(MobileType(keys))
+    static func type(_ keys: String) -> BridgeOutcome {
+        map(MobileType(keys))
     }
 
-    /// 删除一个按键，返回删除后的组合状态。
-    static func backspace() -> ComposingState {
-        state(MobileBackspace())
+    static func shiftLetter(_ key: String) -> BridgeOutcome {
+        map(MobileShiftLetter(key))
     }
 
-    /// 选中第 i 个候选并上屏：返回要插入的文本和上屏后的组合状态。
-    /// 连续选词时引擎会把剩余缓冲重新查词，状态里的缓冲可能非空。
-    static func select(_ index: Int) -> (text: String, state: ComposingState) {
-        let text = MobileSelect(index)
-        return (text, composingState())
+    static func space() -> BridgeOutcome {
+        map(MobileSpace())
     }
 
-    /// 翻页，delta 为 +1/-1，返回翻页后的组合状态。
-    static func page(_ delta: Int) -> ComposingState {
-        state(MobilePage(delta))
+    static func returnKey() -> BridgeOutcome {
+        map(MobileReturn())
     }
 
-    /// 清空当前组合，不删除已经上屏的文本。
+    static func backspace() -> BridgeOutcome {
+        map(MobileBackspace())
+    }
+
+    static func escape() -> BridgeOutcome {
+        map(MobileEscape())
+    }
+
+    static func page(_ delta: Int) -> BridgeOutcome {
+        map(MobilePage(delta))
+    }
+
+    static func select(_ index: Int) -> BridgeOutcome {
+        map(MobileSelect(index))
+    }
+
+    static func selectChar(_ index: Int, last: Bool) -> BridgeOutcome {
+        map(MobileSelectChar(index, last))
+    }
+
+    static func punctuate(_ ch: String) -> BridgeOutcome {
+        map(MobilePunctuate(ch))
+    }
+
+    static func direct(_ text: String) -> BridgeOutcome {
+        map(MobileDirect(text))
+    }
+
+    static func passthrough(_ ch: String) -> BridgeOutcome {
+        map(MobilePassthrough(ch))
+    }
+
+    static func toggleMode() -> BridgeOutcome {
+        map(MobileToggleMode())
+    }
+
+    static func toggleFullWidth() -> BridgeOutcome {
+        map(MobileToggleFullWidth())
+    }
+
     static func reset() {
         MobileReset()
     }
 
-    /// 当前组合状态（不打扰引擎，只读快照）。
-    static func composingState() -> ComposingState {
-        ComposingState(buffer: MobileBuffer(), candidates: parseCandidates(MobileCandidates()))
+    static func finish() -> BridgeOutcome {
+        map(MobileFinish())
     }
 
-    private static func state(_ joined: String) -> ComposingState {
-        ComposingState(buffer: MobileBuffer(), candidates: parseCandidates(joined))
+    static func preedit() -> String {
+        MobilePreedit()
+    }
+
+    static func candidates() -> [String] {
+        parseCandidates(MobileCandidates())
+    }
+
+    static func mode() -> Int {
+        Int(MobileMode())
+    }
+
+    static func fullWidth() -> Bool {
+        MobileFullWidth()
+    }
+
+    private static func map(_ outcome: MobileOutcome?) -> BridgeOutcome {
+        guard let outcome else { return .empty }
+        return BridgeOutcome(
+            text: outcome.text,
+            preedit: outcome.preedit,
+            candidates: parseCandidates(outcome.candidates),
+            consumed: outcome.consumed,
+            mode: Int(outcome.mode),
+            fullWidth: outcome.fullWidth)
     }
 
     /// gomobile 不支持 []string，桥接用换行分隔的字符串传候选。

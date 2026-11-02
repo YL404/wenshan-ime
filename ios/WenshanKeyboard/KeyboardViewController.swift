@@ -296,8 +296,7 @@ final class KeyboardViewController: UIInputViewController {
                     self.punctuationLongPressUsed = false
                     return
                 }
-                let text = self.model.mode == .chinese ? "。" : "."
-                self.apply(self.model.insert(text))
+                self.apply(self.model.punctuate("."))
             },
             background: .systemBackground,
             font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)))
@@ -497,7 +496,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func updateMarkedText() {
-        let text = model.mode == .chinese && model.isComposing ? model.buffer : ""
+        let text = model.isComposing ? model.preedit : ""
         if text.isEmpty {
             clearMarkedText()
             return
@@ -533,8 +532,7 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         punctuationLongPressUsed = true
-        let text = model.mode == .chinese ? "，" : ","
-        apply(model.insert(text))
+        apply(model.punctuate(","))
     }
 
     private func toggleSymbols() {

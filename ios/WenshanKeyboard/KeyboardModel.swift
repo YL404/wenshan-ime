@@ -13,8 +13,9 @@ enum KeyboardOutcome {
     case deleteBackward
 }
 
-/// 键盘输入状态机：引擎加载、拼音组合、候选翻页、中英模式和 Shift 都在这里。
-/// VC 只做渲染和按键转发，不直接碰引擎桥。
+/// 键盘输入状态机：只负责 Swift 侧的 Shift 和宿主上下文。
+/// 拼音组合、标点、中英模式、临时英文和自动补空格都在共享规则层，
+/// VC 只做渲染和按键转发。
 @MainActor
 final class KeyboardModel {
     enum Phase: Equatable {
@@ -37,7 +38,7 @@ final class KeyboardModel {
     }
 
     private(set) var phase: Phase = .loading
-    private(set) var buffer = ""
+    private(set) var preedit = ""
     private(set) var candidates: [String] = []
     private(set) var mode: InputMode = .chinese
     private(set) var shift: ShiftState = .off
@@ -46,7 +47,7 @@ final class KeyboardModel {
     private var isLoading = false
     private var lastShiftTap: TimeInterval = 0
 
-    var isComposing: Bool { !buffer.isEmpty }
+    var isComposing: Bool { !preedit.isEmpty }
 
     /// 回车键标题：组合态显示“确认”，其余跟宿主输入框的 returnKeyType 走。
     var returnKeyTitle: String {
@@ -83,6 +84,7 @@ final class KeyboardModel {
             phase = .failed(error)
         } else {
             phase = .ready
+            mode = WenshanBridge.mode() == 1 ? .english : .chinese
         }
     }
 
@@ -90,55 +92,50 @@ final class KeyboardModel {
         self.returnKeyType = returnKeyType
     }
 
-    /// 字母键。中文态 Shift 直出大写英文；英文态按 Shift 大小写输入。
+    /// 字母键。中文态 Shift 进入共享规则层的临时英文；英文态直接插入。
     func type(_ key: String) -> KeyboardOutcome {
         guard phase == .ready else {
             return direct(key)
         }
         if mode == .english {
-            return direct(key)
+            return apply(WenshanBridge.direct(shift.isActive ? key.uppercased() : key))
         }
         if shift.isActive {
-            let text = buffer + key.uppercased()
-            clearBuffer()
+            let outcome = WenshanBridge.shiftLetter(key)
             if shift == .once { shift = .off }
-            return .commit(text)
+            return apply(outcome)
         }
-        return bind(WenshanBridge.type(key))
+        return apply(WenshanBridge.type(key))
     }
 
-    /// 空格：中文态有候选选首选，有缓冲把字母原样上屏，否则插空格。
+    /// 空格：共享规则层有候选或临时英文时消费，否则由键盘插入空格。
     func space() -> KeyboardOutcome {
-        guard phase == .ready, mode == .chinese else { return .commit(" ") }
-        if !candidates.isEmpty {
-            return commitSelection(0)
-        }
-        if !buffer.isEmpty {
-            let text = buffer
-            clearBuffer()
-            return .commit(text)
-        }
-        return .commit(" ")
+        guard phase == .ready else { return .commit(" ") }
+        let outcome = WenshanBridge.space()
+        return outcome.consumed ? apply(outcome) : .commit(" ")
     }
 
-    /// 回车：组合态把原始编码上屏（和桌面版一致）；否则按宿主语义换行。
+    /// 回车：组合态把原始编码上屏；否则按宿主语义换行。
     func returnKey() -> KeyboardOutcome {
-        guard phase == .ready, mode == .chinese, !buffer.isEmpty else {
-            return .commit("\n")
-        }
-        let text = buffer
-        clearBuffer()
-        return .commit(text)
+        guard phase == .ready else { return .commit("\n") }
+        let outcome = WenshanBridge.returnKey()
+        return outcome.consumed ? apply(outcome) : .commit("\n")
     }
 
-    /// 直接插入文本（符号页按键）：组合非空时把缓冲原样上屏再插。
+    /// 直接插入文本（符号页按键）：组合非空时共享规则层会先上屏候选。
     func insert(_ text: String) -> KeyboardOutcome {
-        guard phase == .ready, mode == .chinese, !buffer.isEmpty else {
-            return .commit(text)
+        guard phase == .ready else { return .commit(text) }
+        return apply(WenshanBridge.direct(text))
+    }
+
+    /// 中文标点键。全半角关闭时规则层不消费，按原字符上屏。
+    func punctuate(_ ch: String) -> KeyboardOutcome {
+        guard phase == .ready else { return .commit(ch) }
+        if mode == .english {
+            return apply(WenshanBridge.direct(ch))
         }
-        let committed = buffer + text
-        clearBuffer()
-        return .commit(committed)
+        let outcome = WenshanBridge.punctuate(ch)
+        return outcome.consumed ? apply(outcome) : apply(WenshanBridge.direct(ch))
     }
 
     /// Shift 轻点切换一次性大写，双击锁定；再点取消。
@@ -156,38 +153,47 @@ final class KeyboardModel {
         }
     }
 
-    /// 中英切换。组合里的编码先原样上屏，避免切换时丢字。
+    /// 中英切换。共享规则层会把组合里的编码先原样上屏。
     func toggleMode() -> KeyboardOutcome {
-        let text = buffer
-        clearBuffer()
-        mode = mode == .chinese ? .english : .chinese
+        guard phase == .ready else {
+            mode = mode == .chinese ? .english : .chinese
+            shift = .off
+            return .handled
+        }
+        let outcome = WenshanBridge.toggleMode()
         shift = .off
-        return text.isEmpty ? .handled : .commit(text)
+        return apply(outcome)
     }
 
     /// 删除：组合态退一格缓冲，否则删正文一个字符。
     func backspace() -> KeyboardOutcome {
-        guard phase == .ready, mode == .chinese, !buffer.isEmpty else {
-            return .deleteBackward
-        }
-        return bind(WenshanBridge.backspace())
+        guard phase == .ready else { return .deleteBackward }
+        let outcome = WenshanBridge.backspace()
+        return outcome.consumed ? apply(outcome) : .deleteBackward
     }
 
     /// 翻页，delta 为 +1/-1。
     func page(_ delta: Int) -> KeyboardOutcome {
-        guard phase == .ready, !candidates.isEmpty else { return .idle }
-        return bind(WenshanBridge.page(delta))
+        guard phase == .ready else { return .idle }
+        let outcome = WenshanBridge.page(delta)
+        if outcome.consumed || !outcome.text.isEmpty {
+            return apply(outcome)
+        }
+        return .idle
     }
 
     /// 选中第 i 个候选并上屏。
     func select(_ index: Int) -> KeyboardOutcome {
         guard phase == .ready else { return .idle }
-        return commitSelection(index)
+        let outcome = WenshanBridge.select(index)
+        return outcome.consumed ? apply(outcome) : .idle
     }
 
     /// 清空当前组合，不删除已经上屏的文本。
     func reset() {
-        clearBuffer()
+        WenshanBridge.reset()
+        preedit = ""
+        candidates = []
         shift = .off
     }
 
@@ -203,26 +209,10 @@ final class KeyboardModel {
         return .commit(text)
     }
 
-    private func commitSelection(_ index: Int) -> KeyboardOutcome {
-        let result = WenshanBridge.select(index)
-        buffer = result.state.buffer
-        candidates = result.state.candidates
-        WenshanBridge.flush()
-        return .commit(result.text)
-    }
-
-    private func bind(_ state: ComposingState) -> KeyboardOutcome {
-        buffer = state.buffer
-        candidates = state.candidates
-        if buffer.isEmpty {
-            return .commit("")
-        }
-        return .handled
-    }
-
-    private func clearBuffer() {
-        WenshanBridge.reset()
-        buffer = ""
-        candidates = []
+    private func apply(_ outcome: BridgeOutcome) -> KeyboardOutcome {
+        preedit = outcome.preedit
+        candidates = outcome.candidates
+        mode = outcome.mode == 1 ? .english : .chinese
+        return outcome.text.isEmpty ? .handled : .commit(outcome.text)
     }
 }

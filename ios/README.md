@@ -3,7 +3,9 @@
 Go 内核 + Swift 6 键盘扩展。和 macOS 共用 `engine/`，iOS 只负责键盘壳、共享数据和系统输入上下文。
 
 当前可用：26 键自然码、候选条横滑/翻页、首选上屏、Shift 一次性大写与双击锁定、
-中英切换、符号页、`returnKeyType` 标题、收起键盘、App Group 词表、用户词频/自造词/短语加载。
+中英切换、临时英文、符号页、`returnKeyType` 标题、收起键盘、App Group 词表、用户词频/
+自造词/短语加载。标点、全半角、Shift、临时英文和自动补空格与 macOS 共用根目录的
+`input/` 规则层，iOS 只保留触摸按键和渲染。
 
 底行按微信键盘/系统键盘的层级排：`123`、句号/逗号小键、宽空格、`中/英`、发送/换行；
 Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻点上屏 `。`，长按上屏 `，`；
@@ -20,7 +22,8 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
   - `ContentView.swift`：启用说明、词表状态、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
   - `WenshanBridge.swift`：gomobile 桥的 Swift 门面。
-  - `KeyboardModel.swift`：`@MainActor` 输入状态机（引擎、组合、候选、中英、Shift）。
+  - `KeyboardModel.swift`：Swift 侧只保留 Shift 状态和宿主上下文；拼音组合、
+    标点、中英模式、临时英文、空格/回车/退格和自动补空格在根目录 `input/`。
   - `KeyboardComponents.swift`：尺寸、按键、可复用候选条；iOS 26 关闭候选条的 scroll edge effect，否则整行文字会被边缘模糊盖住。
   - `KeyboardViewController.swift`：生命周期、布局、系统输入上下文、渲染。
 - `WenshanUITests/`：宿主 App 冒烟测试。

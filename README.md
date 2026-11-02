@@ -52,9 +52,10 @@ pkill -f "Input Methods/Wenshan.app"; rm -rf ~/Library/Input\ Methods/Wenshan.ap
 
 ## iOS
 
-`ios/` 下是 Go 内核 + Swift 6 键盘扩展，复用同一个 `engine/`。已接通 App Group 词表部署、
-候选条、中英切换、Shift、符号页，以及用户词频/自造词/短语加载；仍在模拟器验证阶段，
-真机内存和发布化未完成。构建、无头模拟器验证和已知限制见 [ios/README.md](ios/README.md)。
+`ios/` 下是 Go 内核 + Swift 6 键盘扩展，复用同一个 `engine/` 和 `input/`
+规则层。已接通 App Group 词表部署、候选条、中英切换、Shift、符号页，以及用户词频/
+自造词/短语加载；仍在模拟器验证阶段，真机内存和发布化未完成。构建、无头模拟器验证和
+已知限制见 [ios/README.md](ios/README.md)。
 
 ## 按键
 
@@ -90,6 +91,8 @@ pkill -f "Input Methods/Wenshan.app"; rm -rf ~/Library/Input\ Methods/Wenshan.ap
 ```
 main/imk/tis/objc/candidate    macOS 输入法壳：IMK 注册、按键处理、候选窗、输入源管理
 engine/                        自然码键位、词表二分查找、组句、词频、自造词
+input/                         macOS/iOS 共用的输入规则：标点、中英模式、Shift、
+                               临时英文、空格/回车/退格、中英文自动补空格
 cmd/dictgen                    Rime 词表 → dict.bin
 cmd/icon、tisprobe、swap        图标生成、输入源诊断、安装时原子交换 Contents
 packaging/ scripts/            Info.plist 与本地化资源；构建、安装、修复脚本

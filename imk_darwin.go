@@ -1,12 +1,11 @@
 package main
 
 import (
-	"unicode"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
 
-	"wenshan/engine"
+	"wenshan/input"
 )
 
 // IMK 回调全部发生在主线程，所以这里的状态不加锁。
@@ -43,39 +42,17 @@ var (
 )
 
 var (
-	eng       *engine.Engine
+	sess      *input.Session
 	curClient objc.ID
-
-	// asciiMode 是 Shift 轻点切出来的英文直通模式；fullWidth 控制标点是否转全角。
-	asciiMode = false
-	fullWidth = true
 
 	// 用来区分「按住 Shift 打大写」和「轻点 Shift 切中英」。
 	shiftDown bool
 	shiftUsed bool
 
-	// 中英文之间自动补空格时，靠这个记住「光标前刚出现的是什么」。
-	// 只信自己的状态，不去问应用：问一次要几个同步往返，是毫秒级开销。
-	prevClass int
-	// prevDigit 记录刚上屏的最后一个字符是不是 ASCII 数字。数字后的句号
-	// 保持半角，3.14 不会变成 3。14。
-	prevDigit bool
-
-	// inlineText 是中文态按 Shift+大写切出来的临时英文串。它不进引擎，
-	// 预编辑直接显示原文；空格/回车结束，退格/Esc 可改。
-	inlineText  string
-	inlineSpace bool
-
 	// 光标位置在一个组合里不会变（预编辑串只会往右长），所以每次组合只查一次：
 	// 刚 setMarkedText 完就查要等前台应用排版，是这条路径上最贵的一步。
 	candCaret  NSRect
 	caretValid bool
-)
-
-const (
-	prevNone  = iota // 未知或刚打过空格/标点
-	prevCJK          // 刚上屏中文
-	prevASCII        // 刚打出英文或数字
 )
 
 // handleEvent 是热路径：它的返回值决定这次按键是否被输入法吃掉。
@@ -93,8 +70,8 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	typ := send(event, selEventType)
 	mods := objc.Send[uintptr](event, selModifierFlags)
 	if debugKeys {
-		logf("key type=%d code=%d mods=%#x ascii=%v buf=%q inline=%q",
-			typ, objc.Send[uintptr](event, selKeyCode), mods, asciiMode, eng.Buffer(), inlineText)
+		logf("key type=%d code=%d mods=%#x mode=%v buf=%q inline=%q",
+			typ, objc.Send[uintptr](event, selKeyCode), mods, sess.Mode(), sess.Buffer(), sess.Inline())
 	}
 
 	if typ == nsEventTypeFlagsChanged {
@@ -113,10 +90,11 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	if ch >= 'A' && ch <= 'Z' {
 		ch += 'a' - 'A'
 	}
-	if asciiMode {
-		spaceBeforeASCII(client, ch)
-		prevClass = classOfByte(ch)
-		prevDigit = isASCIIDigit(ch)
+	// 英文直通模式：状态仍由规则层维护，但按键交给应用。
+	if sess.Mode() == input.English {
+		if res := sess.Passthrough(ch); res.Text != "" {
+			insertText(client, res.Text)
+		}
 		return false
 	}
 	// 带 Command/Control/Option 的组合键一律放行，交给应用自己处理。
@@ -125,56 +103,28 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	}
 	keyCode := objc.Send[uintptr](event, selKeyCode)
 
-	// 临时英文串：字母原样追加，空格/回车结束，退格/Esc 可改。
-	// 其他键先把这段英文上屏，再按普通按键继续处理。
-	if inlineText != "" {
-		switch {
-		case raw >= 'a' && raw <= 'z' || raw >= 'A' && raw <= 'Z':
-			inlineText += string(raw)
-			showInline(client)
-			return true
-		case keyCode == keyCodeSpace:
-			commitInline(client, true)
-			return true
-		case keyCode == keyCodeReturn || keyCode == keyCodeKeypadEnter:
-			commitInline(client, false)
-			prevClass = prevNone // 回车结束不补空格，后面紧接中文也不自动加
-			return true
-		case keyCode == keyCodeDelete:
-			inlineText = inlineText[:len(inlineText)-1]
-			if inlineText == "" {
-				cancelInline(client)
-			} else {
-				showInline(client)
-			}
-			return true
-		case keyCode == keyCodeEscape:
-			cancelInline(client)
-			return true
-		default:
-			commitInline(client, false)
-		}
-	}
-
 	// 中文态按住 Shift 打大写字母：没有缓冲时直接上屏；
 	// 正在打拼音时把已打的编码接进临时英文串，再从这字母继续。
 	if raw >= 'A' && raw <= 'Z' && mods&nsModShift != 0 {
-		if len(eng.Buffer()) > 0 {
-			startInline(client, raw)
+		res := sess.ShiftLetter(raw)
+		if res.Consumed {
+			applyPreedit(client)
 			return true
 		}
-		text := string(raw)
-		if needSpaceBefore(raw) {
-			text = " " + text
-		}
-		insertText(client, text)
-		prevClass = prevASCII
-		return true
+		return false
 	}
-	// Shift+空格：全角/半角标点切换。
+	// Shift+空格：全角/半角标点切换。临时英文里仍然按空格结束。
 	if keyCode == keyCodeSpace && mods&nsModShift != 0 {
-		fullWidth = !fullWidth
-		if fullWidth {
+		if sess.Inline() != "" {
+			res := sess.Space()
+			if res.Text != "" {
+				insertText(client, res.Text)
+			}
+			applyPreedit(client)
+			return true
+		}
+		res := sess.ToggleFullWidth()
+		if res.FullWidth {
 			showHud(self, "全角")
 		} else {
 			showHud(self, "半角")
@@ -184,240 +134,122 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 
 	switch keyCode {
 	case keyCodeDelete:
-		prevClass = prevNone
-		if eng.Backspace() {
+		res := sess.Backspace()
+		if res.Consumed {
 			applyPreedit(client)
 			return true
 		}
-		// 删的是正文，前一个字符是什么已经不知道了。
-		prevDigit = false
 		return false
 	case keyCodeEscape:
-		prevClass = prevNone
-		if len(eng.Buffer()) == 0 {
-			return false
+		res := sess.Escape()
+		if res.Consumed {
+			applyPreedit(client)
+			return true
 		}
-		eng.Reset()
-		applyPreedit(client)
-		return true
+		return false
 	case keyCodeReturn, keyCodeKeypadEnter:
 		// 回车把缓冲里的字母原样上屏，中文状态下不用切模式就能打英文。
-		if commitRaw(client) {
+		res := sess.Return()
+		if res.Consumed {
+			insertText(client, res.Text)
+			applyPreedit(client)
 			return true
 		}
-		prevClass = prevNone
-		prevDigit = false
 		return false
-	case keyCodeSpace, keyCodeTab:
-		if text, ok := eng.Select(0); ok {
-			commit(client, text)
+	case keyCodeSpace:
+		res := sess.Space()
+		if res.Consumed {
+			insertText(client, res.Text)
+			applyPreedit(client)
 			return true
 		}
-		// 没有候选（比如打了一串不成立的编码）时，空格也把原样字母送出去。
-		if commitRaw(client) {
+		return false
+	case keyCodeTab:
+		// 临时英文里 Tab 先结束英文，再交给应用切换焦点，不补空格。
+		if sess.Inline() != "" {
+			res := sess.CommitInline(false)
+			if res.Text != "" {
+				insertText(client, res.Text)
+				applyPreedit(client)
+			}
+			return false
+		}
+		res := sess.Space()
+		if res.Consumed {
+			insertText(client, res.Text)
+			applyPreedit(client)
 			return true
 		}
-		prevClass = prevNone
-		prevDigit = false
 		return false
 	case keyCodePageUp:
-		if len(eng.Candidates()) == 0 {
-			return false
+		res := sess.Page(-1)
+		if res.Text != "" {
+			insertText(client, res.Text)
+			applyPreedit(client)
 		}
-		if eng.Page(-1) {
+		if res.Consumed {
 			showCandidates(client)
+			return true
 		}
-		return true
+		return false
 	case keyCodePageDown:
-		if len(eng.Candidates()) == 0 {
-			return false
+		res := sess.Page(1)
+		if res.Text != "" {
+			insertText(client, res.Text)
+			applyPreedit(client)
 		}
-		if eng.Page(1) {
+		if res.Consumed {
 			showCandidates(client)
+			return true
 		}
-		return true
+		return false
 	}
 
-	if len(eng.Buffer()) > 0 && ch >= '1' && ch <= '9' {
-		if text, ok := eng.Select(int(ch - '1')); ok {
-			commit(client, text)
+	if sess.Buffer() != "" && ch >= '1' && ch <= '9' {
+		if res := sess.Select(int(ch - '1')); res.Consumed {
+			insertText(client, res.Text)
+			applyPreedit(client)
 			return true
 		}
 	}
 	// [ / ] 取当前候选的首字 / 尾字，编码消耗和正常选词一样。
-	if len(eng.Buffer()) > 0 && (ch == '[' || ch == ']') {
-		if text, ok := eng.SelectChar(0, ch == ']'); ok {
-			commit(client, text)
+	if sess.Buffer() != "" && (ch == '[' || ch == ']') {
+		if res := sess.SelectChar(0, ch == ']'); res.Consumed {
+			insertText(client, res.Text)
+			applyPreedit(client)
 			return true
 		}
 	}
 	// = / - 翻页。候选窗开着时由输入法接管，到边界也不再当字符上屏。
-	if len(eng.Candidates()) > 0 && (ch == '=' || ch == '-') {
+	if len(sess.Candidates()) > 0 && (ch == '=' || ch == '-') {
 		delta := 1
 		if ch == '-' {
 			delta = -1
 		}
-		if eng.Page(delta) {
+		if res := sess.Page(delta); res.Consumed {
 			showCandidates(client)
+			return true
 		}
-		return true
 	}
 	if ch >= 'a' && ch <= 'z' {
-		if eng.Type(ch) {
+		if res := sess.Type(raw); res.Consumed {
 			applyPreedit(client)
 			return true
 		}
 		return false
 	}
 	// 标点：先把已经输入的词上屏，再插入中文标点，这个键被消费掉。
-	if s, ok := punctuate(ch); ok && fullWidth {
-		if len(eng.Buffer()) > 0 {
-			if text, ok := eng.Select(0); ok {
-				commit(client, text)
-			}
-		}
-		if alt, ok := numberPunct(prevDigit, ch); ok {
-			s = alt
-		}
-		insertText(client, s)
-		prevClass = prevNone
+	if res := sess.Punctuate(ch); res.Consumed {
+		insertText(client, res.Text)
+		applyPreedit(client)
 		return true
 	}
 	// 其他可打印字符：先把已经输入的词上屏，这个键照常交给应用。
-	if len(eng.Buffer()) > 0 && ch >= 0x20 {
-		if text, ok := eng.Select(0); ok {
-			commit(client, text)
-		}
-	}
-	if ch == 0 {
-		// 方向键、功能键这类看不到字符的键，状态就不可信了。
-		prevClass = prevNone
-		prevDigit = false
-		return false
-	}
-	spaceBeforeASCII(client, ch)
-	prevClass = classOfByte(ch)
-	prevDigit = isASCIIDigit(ch)
-	return false
-}
-
-// startInline 把当前拼音缓冲转成临时英文串，并接上触发的大写字母。
-// prevClass 保持到提交时再更新，这样取消后仍能正确判断中英边界。
-func startInline(client objc.ID, ch byte) {
-	inlineText = string(eng.Buffer()) + string(ch)
-	inlineSpace = prevClass == prevCJK
-	eng.Reset()
-	caretValid = false
-	hideCandidates()
-	showInline(client)
-}
-
-// showInline 只刷新预编辑串，候选窗在切进临时英文时已经收起。
-func showInline(client objc.ID) {
-	if inlineText == "" {
-		clearMarked(client)
-		return
-	}
-	ns := nsString(inlineText)
-	if clientCan(client, selSetMarkedText) {
-		send(client, selSetMarkedText, ns, uintptr(len(inlineText)), 0, nsNotFound, 0)
-	}
-	send(ns, selRelease)
-}
-
-// commitInline 把临时英文串上屏。空格结束补一个空格；回车结束不补，
-// 方便后面直接紧跟中文（例如 iOS版、iPhone手机）。
-func commitInline(client objc.ID, trailingSpace bool) {
-	if inlineText == "" {
-		return
-	}
-	text := inlineText
-	if inlineSpace {
-		text = " " + text
-	}
-	if trailingSpace {
-		text += " "
-	}
-	inlineText = ""
-	inlineSpace = false
-	caretValid = false
-	if client != 0 {
-		insertText(client, text)
-	}
-	if trailingSpace {
-		prevClass = prevNone
-	} else {
-		prevClass = prevASCII
-	}
-	hideCandidates()
-}
-
-func cancelInline(client objc.ID) {
-	inlineText = ""
-	inlineSpace = false
-	caretValid = false
-	clearMarked(client)
-	hideCandidates()
-}
-
-// spaceBeforeASCII 在「中文紧挨着英文/数字」时补一个空格。
-func spaceBeforeASCII(client objc.ID, ch byte) {
-	if !needSpaceBefore(ch) {
-		return
-	}
-	if client != 0 {
-		insertText(client, " ")
-	}
-	prevClass = prevASCII
-}
-
-// needSpaceBefore 报告这个字符前面是否需要补空格。
-func needSpaceBefore(ch byte) bool {
-	return isASCIIAlnum(ch) && prevClass == prevCJK
-}
-
-// needsSpaceBeforeCJK 报告上屏中文前是否要补空格。
-func needsSpaceBeforeCJK(prev, class int) bool {
-	return prev == prevASCII && class == prevCJK
-}
-
-func isASCIIDigit(ch byte) bool {
-	return ch >= '0' && ch <= '9'
-}
-
-func isASCIIAlnum(ch byte) bool {
-	return isASCIIDigit(ch) || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z'
-}
-
-func endsWithASCIIDigit(s string) bool {
-	return len(s) > 0 && isASCIIDigit(s[len(s)-1])
-}
-
-// classOfByte 判断透传给应用的单个字符属于哪一类。数字和字母后接中文要
-// 补空格，标点后不补。
-func classOfByte(ch byte) int {
-	if isASCIIAlnum(ch) {
-		return prevASCII
-	}
-	return prevNone
-}
-
-func startsWithHan(s string) bool {
-	for _, r := range s {
-		return unicode.Is(unicode.Han, r)
+	if res := sess.Passthrough(ch); res.Text != "" {
+		insertText(client, res.Text)
+		applyPreedit(client)
 	}
 	return false
-}
-
-// classOf 判断一段刚上屏的文字属于哪一类，用于后续的空格判断。
-func classOf(s string) int {
-	switch {
-	case startsWithHan(s):
-		return prevCJK
-	case s != "" && isASCIIAlnum(s[0]):
-		return prevASCII
-	}
-	return prevNone
 }
 
 // handleFlags 处理 Shift 按下/松开。只有按下期间没打过别的键才算轻点。
@@ -443,25 +275,14 @@ func handleFlags(mods, keyCode uintptr, self objc.ID) {
 // toggleAscii 在中文/英文直通之间切换。切到英文时把没上屏的拼音按原样打出去，
 // 和 Rime 的行为一致。
 func toggleAscii(self objc.ID) {
-	if inlineText != "" {
-		commitInline(curClient, false)
-	}
-	asciiMode = !asciiMode
+	res := sess.ToggleMode()
 	caretValid = false
-	logf("mode: ascii=%v", asciiMode)
-	if asciiMode && len(eng.Buffer()) > 0 {
-		if curClient != 0 {
-			text := string(eng.Buffer())
-			if prevClass == prevCJK {
-				text = " " + text
-			}
-			insertText(curClient, text)
-			prevClass = prevASCII
-		}
-		eng.Reset()
+	logf("mode: %v", res.Mode)
+	if res.Text != "" && curClient != 0 {
+		insertText(curClient, res.Text)
 	}
-	hideCandidates()
-	if asciiMode {
+	applyPreedit(curClient)
+	if res.Mode == input.English {
 		showHud(self, "英文")
 	} else {
 		showHud(self, "中文")
@@ -469,18 +290,14 @@ func toggleAscii(self objc.ID) {
 }
 
 func activateServer(self objc.ID, cmd objc.SEL, sender objc.ID) {
-	eng.Reset()
-	inlineText = ""
-	inlineSpace = false
+	sess.Reset()
 	caretValid = false
-	prevClass = prevNone
-	prevDigit = false
 	shiftDown, shiftUsed = false, false
 	retainClient(sender)
 	hideCandidates()
-	logf("activate ascii=%v", asciiMode)
+	logf("activate mode=%v", sess.Mode())
 	// 英文模式下切回来要能看见状态，否则就像「打不出中文」。
-	if asciiMode {
+	if sess.Mode() == input.English {
 		showHud(self, "英文")
 	}
 }
@@ -513,16 +330,11 @@ func finishInput(client objc.ID) {
 	if client == 0 {
 		client = curClient
 	}
-	if inlineText != "" {
-		commitInline(client, false)
+	res := sess.Finish()
+	if res.Text != "" && client != 0 {
+		insertText(client, res.Text)
 	}
-	if text, ok := eng.Select(0); ok && client != 0 {
-		insertText(client, text)
-	}
-	eng.Reset()
 	caretValid = false
-	prevClass = prevNone
-	prevDigit = false
 	if client != 0 {
 		clearMarked(client)
 	}
@@ -533,19 +345,19 @@ func finishInput(client objc.ID) {
 
 // saveLearning 把词频和自造词落盘（各自攒够次数才真正写）。
 func saveLearning() {
-	if err := eng.SaveFreq(); err != nil {
+	if err := sess.SaveFreq(); err != nil {
 		logf("保存词频失败: %v", err)
 	}
-	if err := eng.SaveUser(); err != nil {
+	if err := sess.SaveUser(); err != nil {
 		logf("保存自造词失败: %v", err)
 	}
 }
 
-// applyPreedit 把当前缓冲写给前台应用，并更新候选窗。
+// applyPreedit 把当前预编辑串写给前台应用，并更新候选窗。
 func applyPreedit(client objc.ID) {
 	retainClient(client)
-	buf := eng.Buffer()
-	if len(buf) == 0 {
+	text := sess.Preedit()
+	if text == "" {
 		clearMarked(client)
 		hideCandidates()
 		caretValid = false
@@ -556,52 +368,13 @@ func applyPreedit(client objc.ID) {
 		candCaret = caretRect(client)
 		caretValid = true
 	}
-	ns := nsString(string(buf))
+	ns := nsString(text)
 	// 光标停在预编辑串末尾；缓冲是纯字母，UTF-16 长度等于字节数。
 	if clientCan(client, selSetMarkedText) {
-		send(client, selSetMarkedText, ns, uintptr(len(buf)), 0, nsNotFound, 0)
+		send(client, selSetMarkedText, ns, uintptr(len(text)), 0, nsNotFound, 0)
 	}
 	send(ns, selRelease)
 	showCandidates(client)
-}
-
-// commit 上屏一段文字，然后继续显示剩余缓冲的预编辑。
-func commit(client objc.ID, text string) {
-	if client == 0 {
-		return
-	}
-	class := classOf(text)
-	// 中文紧跟在英文或数字后面时，先补一个空格。
-	if needsSpaceBeforeCJK(prevClass, class) {
-		text = " " + text
-	}
-	insertText(client, text)
-	prevClass = class
-	applyPreedit(client)
-	if err := eng.SaveFreq(); err != nil {
-		logf("保存词频失败: %v", err)
-	}
-}
-
-// commitRaw 把输入缓冲原样上屏，不做任何转换。
-func commitRaw(client objc.ID) bool {
-	buf := eng.Buffer()
-	if len(buf) == 0 {
-		return false
-	}
-	text := string(buf)
-	eng.Reset()
-	caretValid = false
-	hideCandidates()
-	if client == 0 {
-		return true
-	}
-	if prevClass == prevCJK {
-		text = " " + text
-	}
-	insertText(client, text)
-	prevClass = prevASCII
-	return true
 }
 
 func insertText(client objc.ID, text string) {
@@ -611,7 +384,6 @@ func insertText(client objc.ID, text string) {
 	ns := nsString(text)
 	send(client, selInsertText, ns, nsNotFound, 0)
 	send(ns, selRelease)
-	prevDigit = endsWithASCIIDigit(text)
 }
 
 func clearMarked(client objc.ID) {
@@ -633,7 +405,7 @@ func clientCan(client objc.ID, sel objc.SEL) bool {
 // showCandidates 先把候选窗放好，再让应用去排版预编辑串：候选窗的延迟因此
 // 不受前台应用的排版速度影响。
 func showCandidates(client objc.ID) {
-	cands := eng.Candidates()
+	cands := sess.Candidates()
 	if len(cands) == 0 {
 		hideCandidates()
 		return
