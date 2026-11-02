@@ -240,8 +240,10 @@ func TestRankingTiers(t *testing.T) {
 		{Code: "wofa", Text: "我发", Weight: 3000},
 		{Code: "wofaxm", Text: "我发现", Weight: 100},
 	})
+	// 打了 5 个键时，还没打完的长词应该排在「只用掉前两个键」的高频单字前面；
+	// 覆盖按键多的短词（我发）也比覆盖少的单字（我）更具体。
 	got := d.Lookup([]byte("wofax"), 9)
-	if len(got) != 3 || got[0].Text != "我发现" || got[1].Text != "我" {
+	if len(got) != 3 || got[0].Text != "我发现" || got[1].Text != "我发" || got[2].Text != "我" {
 		t.Fatalf("Lookup(wofax) = %v", got)
 	}
 	// 打满 wofa 时，刚好用完缓冲的词优先于更长的词。
@@ -416,5 +418,70 @@ func TestUserDictLearn(t *testing.T) {
 	e2.Select(findText(t, e2, "好"))
 	if u2.Len() != 1 {
 		t.Fatalf("单字组合也应记下: %d", u2.Len())
+	}
+}
+
+// 打完一个词组再打下个音节的声母时，组句要能把末尾声母延展成完整音节，
+// 而不是让候选塌回单字。
+func TestComposeTrailingInitial(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "wofaxm", Text: "我发现", Weight: 900000},
+		{Code: "ve", Text: "这", Weight: 400000},
+	})
+	e := New(d)
+	for _, ch := range []byte("wofaxmv") {
+		e.Type(ch)
+	}
+	// v 是 zh 的声母键：词格应竞争出 我发现 + 这。
+	got := e.Candidates()
+	if len(got) == 0 || got[0].Text != "我发现这" {
+		t.Fatalf("wofaxmv 候选 = %v", got)
+	}
+	// 上屏消耗全部实际按键，未输入的韵母不留在缓冲里。
+	text, ok := e.Select(0)
+	if !ok || text != "我发现这" {
+		t.Fatalf("Select = %q, %v", text, ok)
+	}
+	if len(e.Buffer()) != 0 {
+		t.Fatalf("缓冲没清空: %q", e.Buffer())
+	}
+}
+
+// 末尾多着声母键时，覆盖按键多的前缀词要排在覆盖少的高频单字前面。
+func TestOddTailRanking(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "wo", Text: "我", Weight: 9000000},
+		{Code: "wofaxm", Text: "我发现", Weight: 100},
+	})
+	e := New(d)
+	for _, ch := range []byte("wofaxmv") {
+		e.Type(ch)
+	}
+	got := e.Candidates()
+	if len(got) < 2 || got[0].Text != "我发现" || got[1].Text != "我" {
+		t.Fatalf("wofaxmv 候选 = %v", got)
+	}
+}
+
+// 只有一个完整音节加一个声母键（3 个键）时不做末尾延展：这时用户多半在
+// 打下一个词，前缀词（你好）不能被拼出来的单字组合（你和）压下去。
+func TestThreeKeysKeepsPrefix(t *testing.T) {
+	d := buildDict(t, []Entry{
+		{Code: "ni", Text: "你", Weight: 500},
+		{Code: "he", Text: "和", Weight: 400},
+		{Code: "nihk", Text: "你好", Weight: 900},
+	})
+	e := New(d)
+	for _, ch := range []byte("nih") {
+		e.Type(ch)
+	}
+	got := e.Candidates()
+	if len(got) == 0 || got[0].Text != "你好" {
+		t.Fatalf("nih 候选 = %v", got)
+	}
+	for _, c := range got {
+		if c.Text == "你和" {
+			t.Errorf("3 键不应拼出 你和: %v", got)
+		}
 	}
 }

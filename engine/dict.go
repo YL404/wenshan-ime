@@ -101,10 +101,11 @@ func (d *Dict) lowerBound(prefix []byte) int {
 	return lo
 }
 
-// 候选分三层：编码刚好用完缓冲的最优先（打 ni 给「你」，打 nihk 给「你好」），
-// 其次是还没打完的长词（打 wofax 给「我发现」），最后才是只用掉前几个键的短词。
-// 层号放在高位，层内按词频排。
+// 候选分四层：编码刚好用完缓冲的最优先（打 ni 给「你」，打 nihk 给「你好」），
+// 其次是还没打完的长词（打 wofax 给「我发现」），再次是只用掉前几个键的短词。
+// 层号放在高位，层内按词频排。tierTypo 留给纠错候选，永远在正常候选之后。
 const (
+	tierTypo  = 0 // 按错一键纠出来的词，只补空位，不抢正常候选的位置
 	tierShort = 1 // 编码比缓冲短
 	tierLong  = 2 // 编码比缓冲长，词还没打完
 	tierExact = 3 // 编码刚好用完缓冲
@@ -117,6 +118,12 @@ func candidateScore(weight uint32, codeLen, bufLen int) int64 {
 		tier = tierExact
 	case codeLen > bufLen:
 		tier = tierLong
+	}
+	// 末尾多着一个声母键（奇数缓冲）时，覆盖按键多的短词更具体，排在
+	// 覆盖少的单字前面：打 wofaxmv 时「我发现」不该沉到「握」「窝」后面。
+	// 编码最长 32 字节占 6 位，与 32 位的权重区不重叠。
+	if bufLen%2 == 1 && tier == tierShort {
+		return tier<<40 | int64(codeLen)<<32 | int64(weight)
 	}
 	return tier<<40 | int64(weight)
 }
@@ -238,23 +245,32 @@ func (d *Dict) exactAlts(code []byte, n int) []altText {
 
 // Compose 把整个缓冲切成若干词，返回若干种拼法（最优的一种加上逐段换同音词的变体）。
 // 词库里的条目大多是词而不是整句，靠这一步才能打出「我们继续」这种组合。
+//
+// 末尾多出一个声母键时（缓冲奇数长），把它当作可延展的半个音节：枚举 26 个
+// 韵母键补全最后一个音节，让词格按词频竞争出「我发现 + zh → 我发现这」。
+// 未输入的韵母不算进编码，候选仍然只消耗实际打过的键。
 func (d *Dict) Compose(buf []byte, limit int) []Candidate {
-	if len(buf) < 4 || len(buf)%2 != 0 || d.n == 0 || limit <= 0 {
+	if len(buf) < 4 || d.n == 0 || limit <= 0 {
 		return nil
 	}
-	syllables := len(buf) / 2
-	best := make([]float64, syllables+1)
-	prev := make([]int, syllables+1)
-	segs := make([]int, syllables+1)
-	for i := 1; i <= syllables; i++ {
+	odd := len(buf)%2 == 1
+	syls := len(buf) / 2
+	total := syls
+	if odd {
+		total++
+	}
+	best := make([]float64, total+1)
+	prev := make([]int, total+1)
+	segs := make([]int, total+1)
+	for i := 1; i <= total; i++ {
 		best[i] = math.Inf(-1)
 		prev[i] = -1
 	}
-	for i := 0; i < syllables; i++ {
+	for i := 0; i < syls; i++ {
 		if math.IsInf(best[i], -1) {
 			continue
 		}
-		for j := i + 1; j <= syllables && j-i <= maxWordSyllables; j++ {
+		for j := i + 1; j <= syls && j-i <= maxWordSyllables; j++ {
 			w, found := d.exactWeight(buf[i*2 : j*2])
 			if !found {
 				continue
@@ -266,14 +282,38 @@ func (d *Dict) Compose(buf []byte, limit int) []Candidate {
 			}
 		}
 	}
-	// 整段就是一个词时不用拼接，词典候选里已经有了。
-	if prev[syllables] < 0 || segs[syllables] < 2 {
+	// 末尾那个声母音节：词跨 [i,total) 的编码是 buf[i*2:] 再补一个韵母键。
+	var lastFinal byte
+	if odd {
+		var scratch [maxBuf]byte
+		for i := max(0, total-maxWordSyllables); i <= syls; i++ {
+			if math.IsInf(best[i], -1) {
+				continue
+			}
+			code := append(scratch[:0], buf[i*2:]...)
+			for f := byte('a'); f <= 'z'; f++ {
+				code = append(code, f)
+				w, found := d.exactWeight(code)
+				code = code[:len(code)-1]
+				if !found {
+					continue
+				}
+				if s := best[i] + math.Log(float64(w)+1) - segmentPenalty; s > best[total] {
+					best[total] = s
+					prev[total] = i
+					segs[total] = segs[i] + 1
+					lastFinal = f
+				}
+			}
+		}
+	}
+	if prev[total] < 0 || segs[total] < 2 {
 		return nil
 	}
 
 	// 回溯出每段的边界（以音节计）。
-	ends := make([]int, 0, segs[syllables])
-	for i := syllables; i > 0; i = prev[i] {
+	ends := make([]int, 0, segs[total])
+	for i := total; i > 0; i = prev[i] {
 		ends = append(ends, i)
 	}
 	slices.Reverse(ends)
@@ -284,10 +324,19 @@ func (d *Dict) Compose(buf []byte, limit int) []Candidate {
 		from = e
 	}
 
-	// 每段的同音备选：整段都取首选是基准，其余是逐段替换的变体。
+	// 每段的同音备选：普通段直接取 buf 切片；末尾声母段要补上选中的韵母键。
+	var trail []byte
 	alts := make([][]altText, len(ends))
 	for k := range ends {
-		alts[k] = d.exactAlts(buf[starts[k]*2:ends[k]*2], altPerSegment)
+		var code []byte
+		if ends[k]*2 <= len(buf) {
+			code = buf[starts[k]*2 : ends[k]*2]
+		} else {
+			trail = append(trail[:0], buf[starts[k]*2:]...)
+			trail = append(trail, lastFinal)
+			code = trail
+		}
+		alts[k] = d.exactAlts(code, altPerSegment)
 		if len(alts[k]) == 0 {
 			return nil
 		}
