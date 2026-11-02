@@ -1,6 +1,6 @@
 <img src="assets/icon.png" width="128" align="right" alt="文山输入法图标">
 
-# 文山输入法
+<h1>文山输入法<br clear="right"></h1>
 
 macOS 上的双拼输入法，键位为自然码。纯 Go 实现，无 cgo，也不依赖 librime 之类的
 输入法引擎：词表在构建时编译进可执行文件，每次按键只是一次二分查找。
