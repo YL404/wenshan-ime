@@ -57,6 +57,9 @@ var (
 	// 中英文之间自动补空格时，靠这个记住「光标前刚出现的是什么」。
 	// 只信自己的状态，不去问应用：问一次要几个同步往返，是毫秒级开销。
 	prevClass int
+	// prevDigit 记录刚上屏的最后一个字符是不是 ASCII 数字。数字后的句号
+	// 保持半角，3.14 不会变成 3。14。
+	prevDigit bool
 
 	// inlineText 是中文态按 Shift+大写切出来的临时英文串。它不进引擎，
 	// 预编辑直接显示原文；空格/回车结束，退格/Esc 可改。
@@ -112,6 +115,7 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	}
 	if asciiMode {
 		spaceBeforeASCII(client, ch)
+		prevDigit = isASCIIDigit(ch)
 		return false
 	}
 	// 带 Command/Control/Option 的组合键一律放行，交给应用自己处理。
@@ -184,6 +188,8 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 			applyPreedit(client)
 			return true
 		}
+		// 删的是正文，前一个字符是什么已经不知道了。
+		prevDigit = false
 		return false
 	case keyCodeEscape:
 		prevClass = prevNone
@@ -199,6 +205,7 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 			return true
 		}
 		prevClass = prevNone
+		prevDigit = false
 		return false
 	case keyCodeSpace, keyCodeTab:
 		if text, ok := eng.Select(0); ok {
@@ -210,6 +217,7 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 			return true
 		}
 		prevClass = prevNone
+		prevDigit = false
 		return false
 	case keyCodePageUp:
 		if len(eng.Candidates()) == 0 {
@@ -267,6 +275,9 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 				commit(client, text)
 			}
 		}
+		if alt, ok := numberPunct(prevDigit, ch); ok {
+			s = alt
+		}
 		insertText(client, s)
 		prevClass = prevNone
 		return true
@@ -280,9 +291,11 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	if ch == 0 {
 		// 方向键、功能键这类看不到字符的键，状态就不可信了。
 		prevClass = prevNone
+		prevDigit = false
 		return false
 	}
 	spaceBeforeASCII(client, ch)
+	prevDigit = isASCIIDigit(ch)
 	return false
 }
 
@@ -361,8 +374,16 @@ func needSpaceBefore(ch byte) bool {
 	return isASCIIAlnum(ch) && prevClass == prevCJK
 }
 
+func isASCIIDigit(ch byte) bool {
+	return ch >= '0' && ch <= '9'
+}
+
 func isASCIIAlnum(ch byte) bool {
-	return ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z'
+	return isASCIIDigit(ch) || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z'
+}
+
+func endsWithASCIIDigit(s string) bool {
+	return len(s) > 0 && isASCIIDigit(s[len(s)-1])
 }
 
 func startsWithHan(s string) bool {
@@ -437,6 +458,7 @@ func activateServer(self objc.ID, cmd objc.SEL, sender objc.ID) {
 	inlineSpace = false
 	caretValid = false
 	prevClass = prevNone
+	prevDigit = false
 	shiftDown, shiftUsed = false, false
 	retainClient(sender)
 	hideCandidates()
@@ -484,6 +506,7 @@ func finishInput(client objc.ID) {
 	eng.Reset()
 	caretValid = false
 	prevClass = prevNone
+	prevDigit = false
 	if client != 0 {
 		clearMarked(client)
 	}
@@ -572,6 +595,7 @@ func insertText(client objc.ID, text string) {
 	ns := nsString(text)
 	send(client, selInsertText, ns, nsNotFound, 0)
 	send(ns, selRelease)
+	prevDigit = endsWithASCIIDigit(text)
 }
 
 func clearMarked(client objc.ID) {

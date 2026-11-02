@@ -27,6 +27,15 @@ var punctTable = map[byte][]string{
 	'\'': {"‘", "’"},
 }
 
+// numberPunct 返回数字后面应保持半角的标点。只处理句号：
+// 3.14 不该变成 3。14。
+func numberPunct(prevDigit bool, ch byte) (string, bool) {
+	if prevDigit && ch == '.' {
+		return ".", true
+	}
+	return "", false
+}
+
 // punctAlternated 记录交替型标点上一次用的是哪一个。
 var punctAlternated [128]bool
 

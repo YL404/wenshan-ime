@@ -69,6 +69,21 @@ func TestPunctuate(t *testing.T) {
 	}
 }
 
+func TestNumberPunct(t *testing.T) {
+	if s, ok := numberPunct(true, '.'); !ok || s != "." {
+		t.Fatalf("数字后的句号 = %q, %v", s, ok)
+	}
+	if _, ok := numberPunct(false, '.'); ok {
+		t.Fatal("非数字后的句号不该走半角")
+	}
+	if _, ok := numberPunct(true, ','); ok {
+		t.Fatal("目前只处理句号")
+	}
+	if !endsWithASCIIDigit("3.14") || endsWithASCIIDigit("3.14是") || endsWithASCIIDigit("") {
+		t.Fatal("endsWithASCIIDigit 判断不对")
+	}
+}
+
 func TestSpacing(t *testing.T) {
 	defer func() { prevClass = prevNone }()
 
