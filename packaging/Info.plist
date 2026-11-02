@@ -10,6 +10,8 @@
 	<string>文山</string>
 	<key>CFBundleIconFile</key>
 	<string>Wenshan.icns</string>
+	<key>tsInputMethodIconFileKey</key>
+	<string>WenshanMenu.tiff</string>
 	<key>CFBundleExecutable</key>
 	<string>Wenshan</string>
 	<key>CFBundleIdentifier</key>
@@ -50,6 +52,10 @@
 				<true/>
 				<key>tsInputModeIsVisibleKey</key>
 				<true/>
+				<key>tsInputModeMenuIconFileKey</key>
+				<string>WenshanMenu.tiff</string>
+				<key>tsInputModePaletteIconFileKey</key>
+				<string>WenshanMenu.tiff</string>
 				<key>tsInputModePrimaryInScriptKey</key>
 				<true/>
 				<key>tsInputModeScriptKey</key>

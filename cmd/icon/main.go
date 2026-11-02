@@ -1,6 +1,7 @@
-// Command icon 画文山输入法的山形图标，输出 iconutil 需要的 .iconset 目录。
+// Command icon 画文山输入法的图标：纸色圆角方形 + 墨山 + 朱红小印，
+// 同时输出菜单栏用的单色方块镂空图标。
 //
-//	go run ./cmd/icon -out build/Wenshan.iconset -preview build/icon-preview.png
+//	go run ./cmd/icon -out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset
 //
 // 图形直接用扫描线填充画，不依赖任何绘图库；每档先放大四倍再降采样，
 // 这样小尺寸也有干净的边缘。
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"log"
 	"math"
@@ -21,17 +23,22 @@ import (
 
 type point struct{ X, Y float64 }
 
-// 坐标都是 0-100 的归一化值，y 轴朝下。
+// 坐标都是 0-100 的归一化值，y 轴朝下。App 图标的圆角方形占 10-90。
 var (
-	backPeak = []point{{27, 34}, {-8, 90}, {56, 90}}
-	mainPeak = []point{{54, 14}, {8, 90}, {96, 90}}
-	snowCap  = []point{{54, 14}, {63, 37}, {58, 33}, {54, 38}, {49, 33}, {44, 37}}
+	backPeak = []point{{30, 44}, {2, 86}, {60, 86}}
+	mainPeak = []point{{55, 36}, {16, 86}, {94, 86}}
+	snowCap  = []point{{55, 36}, {69, 54}, {61, 49}, {55, 54}, {49, 49}, {41, 54}}
+	seal     = []point{{74, 15}, {83, 15}, {83, 24}, {74, 24}}
+	sealPeak = []point{{76, 22}, {78, 19.5}, {79.2, 20.8}, {80.5, 17}, {82, 22}}
 )
 
 var (
-	backColor = color.RGBA{R: 0x7f, G: 0xa3, B: 0xc4, A: 0xff}
-	mainColor = color.RGBA{R: 0x2e, G: 0x4a, B: 0x66, A: 0xff}
-	capColor  = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	paper   = color.RGBA{R: 0xf3, G: 0xec, B: 0xdd, A: 0xff}
+	snow    = color.RGBA{R: 0xf8, G: 0xfb, B: 0xfd, A: 0xff}
+	ink     = color.RGBA{R: 0x1f, G: 0x2a, B: 0x36, A: 0xff}
+	inkWash = color.RGBA{R: 0x7e, G: 0x93, B: 0xa3, A: 0xff}
+	sealRed = color.RGBA{R: 0xc0, G: 0x50, B: 0x3a, A: 0xff}
+	menuInk = color.RGBA{A: 0xff}
 )
 
 // iconset 是 iconutil 认的文件名和对应像素尺寸。
@@ -51,25 +58,50 @@ var iconset = []struct {
 	{"icon_512x512@2x.png", 1024},
 }
 
+// menuIcons 是菜单栏模板图的 1x/2x 两档。
+var menuIcons = []struct {
+	name string
+	size int
+}{
+	{"icon_16x16.png", 16},
+	{"icon_16x16@2x.png", 32},
+}
+
 func main() {
-	out := flag.String("out", "build/Wenshan.iconset", "输出的 iconset 目录")
-	preview := flag.String("preview", "", "另外输出一张预览图")
+	out := flag.String("out", "build/Wenshan.iconset", "App 图标的 iconset 目录")
+	menuOut := flag.String("menu-out", "build/WenshanMenu.iconset", "菜单栏图标的 iconset 目录")
+	preview := flag.String("preview", "", "另外输出一张 App 图标预览图")
+	menuPreview := flag.String("menu-preview", "", "另外输出一张菜单栏图标预览图")
 	flag.Parse()
 
-	if err := os.MkdirAll(*out, 0o755); err != nil {
-		log.Fatal(err)
+	for _, dir := range []string{*out, *menuOut} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatal(err)
+		}
 	}
 	for _, it := range iconset {
-		if err := writePNG(filepath.Join(*out, it.name), render(it.size)); err != nil {
+		if err := writePNG(filepath.Join(*out, it.name), renderApp(it.size)); err != nil {
+			log.Fatal(err)
+		}
+	}
+	for _, it := range menuIcons {
+		if err := writePNG(filepath.Join(*menuOut, it.name), renderMenu(it.size)); err != nil {
 			log.Fatal(err)
 		}
 	}
 	fmt.Printf("%s: %d 个尺寸\n", *out, len(iconset))
+	fmt.Printf("%s: %d 个尺寸\n", *menuOut, len(menuIcons))
 	if *preview != "" {
-		if err := writePNG(*preview, render(512)); err != nil {
+		if err := writePNG(*preview, renderApp(512)); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println(*preview)
+	}
+	if *menuPreview != "" {
+		if err := writePNG(*menuPreview, renderMenu(128)); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(*menuPreview)
 	}
 }
 
@@ -85,19 +117,38 @@ func writePNG(path string, img image.Image) error {
 	return f.Close()
 }
 
-// render 画一张 size×size 的图标。小尺寸用 4 倍超采样，大尺寸用 2 倍。
-func render(size int) *image.RGBA {
+// renderApp 画一张 size×size 的 App 图标：纸色圆角方形、墨山、朱红小印。
+func renderApp(size int) *image.RGBA {
 	ss := 4
 	if size >= 512 {
 		ss = 2
 	}
 	w := size * ss
 	img := image.NewRGBA(image.Rect(0, 0, w, w))
-	scale := float64(w) / 100
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: paper}, image.Point{}, draw.Src)
 
-	fill(img, backColor, scalePoints(backPeak, scale))
-	fill(img, mainColor, scalePoints(mainPeak, scale))
-	fill(img, capColor, scalePoints(snowCap, scale))
+	scale := float64(w) / 100
+	fill(img, inkWash, scalePoints(backPeak, scale))
+	fill(img, ink, scalePoints(mainPeak, scale))
+	fill(img, snow, scalePoints(snowCap, scale))
+	fill(img, sealRed, scalePoints(seal, scale))
+	fill(img, paper, scalePoints(sealPeak, scale))
+	maskSquircle(img)
+
+	return downsample(img, ss)
+}
+
+// renderMenu 画菜单栏模板：圆角方块挖掉一座山。
+func renderMenu(size int) *image.RGBA {
+	ss := 4
+	w := size * ss
+	img := image.NewRGBA(image.Rect(0, 0, w, w))
+	scale := float64(w) / 16
+
+	fillRoundedRect(img, menuInk, 0, 0, 16*scale, 16*scale, 3.6*scale)
+	clear(img, scalePoints([]point{
+		{2.2, 13.2}, {4.8, 7.6}, {6, 9.2}, {8.2, 3.6}, {13.8, 13.2},
+	}, scale))
 
 	return downsample(img, ss)
 }
@@ -110,7 +161,7 @@ func scalePoints(pts []point, s float64) []point {
 	return out
 }
 
-// fill 用扫描线填多边形（奇偶规则）。
+// fill 用扫描线填多边形（奇偶规则）。传透明色就是挖空。
 func fill(img *image.RGBA, c color.RGBA, pts []point) {
 	b := img.Bounds()
 	ymin, ymax := math.Inf(1), math.Inf(-1)
@@ -138,6 +189,44 @@ func fill(img *image.RGBA, c color.RGBA, pts []point) {
 			to := min(int(math.Floor(xs[i+1]-0.5)), b.Max.X-1)
 			for x := from; x <= to; x++ {
 				img.SetRGBA(x, y, c)
+			}
+		}
+	}
+}
+
+func clear(img *image.RGBA, pts []point) {
+	fill(img, color.RGBA{}, pts)
+}
+
+// fillRoundedRect 画实心圆角矩形。边界在放大后的像素空间里，降采样负责抗锯齿。
+func fillRoundedRect(img *image.RGBA, c color.RGBA, x0, y0, x1, y1, r float64) {
+	for y := int(math.Floor(y0)); y < int(math.Ceil(y1)); y++ {
+		for x := int(math.Floor(x0)); x < int(math.Ceil(x1)); x++ {
+			px, py := float64(x)+0.5, float64(y)+0.5
+			if px < x0 || px > x1 || py < y0 || py > y1 {
+				continue
+			}
+			cx := math.Max(x0+r, math.Min(px, x1-r))
+			cy := math.Max(y0+r, math.Min(py, y1-r))
+			dx, dy := px-cx, py-cy
+			if dx*dx+dy*dy <= r*r {
+				img.SetRGBA(x, y, c)
+			}
+		}
+	}
+}
+
+// maskSquircle 把 10-90 之外的像素清掉，留下圆角方形底板。
+func maskSquircle(img *image.RGBA) {
+	b := img.Bounds()
+	n := float64(b.Dx())
+	for y := 0; y < b.Dy(); y++ {
+		ny := math.Abs((float64(y)+0.5)/n*100-50) / 40
+		yn := math.Pow(ny, 5)
+		for x := 0; x < b.Dx(); x++ {
+			nx := math.Abs((float64(x)+0.5)/n*100-50) / 40
+			if math.Pow(nx, 5)+yn > 1 {
+				img.SetRGBA(x, y, color.RGBA{})
 			}
 		}
 	}

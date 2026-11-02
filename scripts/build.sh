@@ -15,8 +15,12 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 go build -trimpath -ldflags "-s -w" -o "$app/Contents/MacOS/Wenshan" .
 cp packaging/Info.plist "$app/Contents/Info.plist"
 cp -R packaging/zh-Hans.lproj packaging/en.lproj "$app/Contents/Resources/"
-go run ./cmd/icon -out build/Wenshan.iconset
+go run ./cmd/icon -out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset
 iconutil -c icns build/Wenshan.iconset -o "$app/Contents/Resources/Wenshan.icns"
+# 菜单栏用 16 pt 模板图；32×32@144dpi 正好是 2x。
+sips -s format tiff -s dpiWidth 144 -s dpiHeight 144 \
+	build/WenshanMenu.iconset/icon_16x16@2x.png \
+	--out "$app/Contents/Resources/WenshanMenu.tiff" >/dev/null
 printf 'APPL????' > "$app/Contents/PkgInfo"
 # 用固定身份签名（Apple Development 证书）能让系统把每次构建认成同一个应用，
 # TCC 授权（"允许启用"）不会因为重新编译而重置。不设就用 ad-hoc。

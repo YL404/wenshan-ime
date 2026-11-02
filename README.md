@@ -54,7 +54,7 @@ punct.go              中文标点表
 tis_darwin.go         启动后重新选中自身，逼前台应用重连
 engine/               自然码键位、词表二分查找、组句、词频、自造词
 cmd/dictgen           Rime 词表 → dict.bin
-cmd/icon              生成山形图标
+cmd/icon              生成 App 图标与菜单栏图标
 cmd/tisprobe          输入源诊断（列表、选中、启用、重注册）
 cmd/swap              安装时原子交换 Contents，避免输入源失效
 packaging/            Info.plist 与本地化资源
