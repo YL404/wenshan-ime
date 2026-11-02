@@ -124,6 +124,13 @@ final class CandidateBar: UIView {
         collectionView.showsHorizontalScrollIndicator = false
         collectionView.alwaysBounceHorizontal = true
         collectionView.contentInset = UIEdgeInsets(top: 0, left: 2, bottom: 0, right: 2)
+        if #available(iOS 26.0, *) {
+            // 候选条只有一行高，默认 edge effect 会盖住整行候选文字，看起来像被高斯模糊。
+            collectionView.topEdgeEffect.isHidden = true
+            collectionView.bottomEdgeEffect.isHidden = true
+            collectionView.leftEdgeEffect.isHidden = true
+            collectionView.rightEdgeEffect.isHidden = true
+        }
         collectionView.register(CandidateCell.self, forCellWithReuseIdentifier: CandidateCell.reuseID)
         collectionView.dataSource = self
         collectionView.delegate = self
