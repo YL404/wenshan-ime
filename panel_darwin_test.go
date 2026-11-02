@@ -99,7 +99,7 @@ func TestRenderPanel(t *testing.T) {
 	if !cand.ensure() {
 		t.Fatal("候选窗创建失败")
 	}
-	cand.layout([]string{"1.一般", "2.一半", "3.已办", "4.一班", "5.一版"}, -1,
+	cand.layout([]string{"1.一般", "2.一半", "3.已办", "4.一班", "5.一版"}, 0,
 		NSRect{X: 300, Y: 400, W: 2, H: 16})
 	for i := 0; i < 5; i++ {
 		t.Logf("chip[%d] bg=%+v text=%+v", i,
