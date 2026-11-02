@@ -80,14 +80,17 @@ var (
 )
 
 const (
-	candFontSize = 14.0
-	candPadX     = 7.0 // 色块内左右留白
-	candPadY     = 3.0 // 色块内上下留白
-	candGap      = 6.0 // 候选之间的间隔
-	candOuter    = 6.0 // 面板四周留白
-	candRadius   = 8.0 // 面板圆角
-	chipRadius   = 5.0 // 候选色块圆角
-	maxChips     = 9
+	candFontSize  = 14.0
+	candLabelSize = 10.0
+	candPadX      = 7.0  // 色块内左右留白
+	candPadY      = 3.0  // 色块内上下留白
+	candGap       = 6.0  // 候选之间的间隔
+	candOuter     = 6.0  // 面板四周留白
+	candRadius    = 8.0  // 面板圆角
+	chipRadius    = 5.0  // 候选色块圆角
+	candLabelSlot = 11.0 // 序号固定槽位
+	candLabelGap  = 4.0  // 序号与候选之间的间隔
+	maxChips      = 9
 )
 
 // NSSize 和 NSPoint 的内存布局一样，都是两个 CGFloat。
@@ -97,18 +100,23 @@ type candWindow struct {
 	panel   objc.ID
 	content objc.ID
 	bg      [maxChips]objc.ID // 圆角色块
-	chips   [maxChips]objc.ID // 色块上的文字
+	labels  [maxChips]objc.ID // 色块上的序号
+	chips   [maxChips]objc.ID // 色块上的候选文字
 
 	// 下面这些对象要跨事件循环一直用，必须自己 retain：
 	// NSFont/NSColor/NSDictionary 的构造方法返回的都是自动释放对象，
 	// 不 retain 的话事件循环一结束就成了野指针。
-	font  objc.ID
-	label objc.ID // 选中文字：跟随系统标签色，深浅外观自动变
-	dim   objc.ID // 未选中文字：深色面板配浅灰字
-	dimLt objc.ID // 未选中文字：浅色面板配深灰字
+	font       objc.ID
+	labelFont  objc.ID // 序号字体，比候选小一号
+	label      objc.ID // 选中文字：跟随系统标签色，深浅外观自动变
+	dim        objc.ID // 未选中文字：深色面板配浅灰字
+	dimLt      objc.ID // 未选中文字：浅色面板配深灰字
+	labelDim   objc.ID // 未选中序号：比候选文字再弱一档
+	labelDimLt objc.ID
 
 	// 量文字宽度用的属性字典，只建一次。
-	attrs objc.ID
+	attrs      objc.ID
+	labelAttrs objc.ID
 
 	// NSColor.CGColor 返回的只是借用，由 autorelease pool 管着，
 	// 事件循环一排水就成野指针，所以也要像 NSColor 一样显式 retain。
@@ -150,11 +158,15 @@ func (c *candWindow) ensure() bool {
 	send(panel, selSetCollectionBehavior, uintptr(nsCollectionCanJoinAllSpaces|nsCollectionFullScreenAux))
 
 	c.font = keep(send(objc.ID(objc.GetClass("NSFont")), selSystemFontOfSize, candFontSize))
+	c.labelFont = keep(send(objc.ID(objc.GetClass("NSFont")), selSystemFontOfSize, candLabelSize))
 	// 选中文字用系统标签色：浅色外观是近黑，深色外观是白，淡蓝底上都够清楚。
 	c.label = keep(send(objc.ID(objc.GetClass("NSColor")), selLabelColor))
 	// 未选中文字备深浅两套：深色面板配浅灰字，浅色面板配深灰字。
 	c.dim = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.82, 1.0))
 	c.dimLt = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.15, 1.0))
+	// 序号再弱一档：仍看得清，但不会和候选正文抢注意力。
+	c.labelDim = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.62, 1.0))
+	c.labelDimLt = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.42, 1.0))
 	// 面板底也备深浅两套：深色是 HUD 风，浅色接近系统候选条的白底。
 	darkPanel := send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.12, 0.97)
 	lightPanel := send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.98, 0.97)
@@ -188,6 +200,7 @@ func (c *candWindow) ensure() bool {
 	// sizeWithAttributes: 直接量文字本身，避免把 NSTextField 的 cell 边距也算进色块。
 	fontKey := nsString("NSFont")
 	c.attrs = keep(send(objc.ID(objc.GetClass("NSDictionary")), selDictWithObject, c.font, fontKey))
+	c.labelAttrs = keep(send(objc.ID(objc.GetClass("NSDictionary")), selDictWithObject, c.labelFont, fontKey))
 	send(fontKey, selRelease)
 
 	// 内容视图做成圆角图层，面板本身透明。
@@ -200,9 +213,9 @@ func (c *candWindow) ensure() bool {
 	send(panel, selSetContentView, content)
 
 	for i := range c.chips {
-		// 底色和文字分成两个视图：色块负责圆角和内边距，文字视图的尺寸
-		// 就等于实测文字大小，这样才能真正居中（NSTextField 的 cell 自带
-		// 内边距，单靠 setAlignment: 会偏）。
+		// 底色、序号、候选分成三个视图：色块负责圆角和内边距，两个文字视图
+		// 的尺寸都等于实测文字大小，这样才能真正居中（NSTextField 的 cell
+		// 自带内边距，单靠 setAlignment: 会偏）。
 		bg := send(send(objc.ID(objc.GetClass("NSView")), selAlloc), selInitWithFrame, NSRect{W: 10, H: 10})
 		send(bg, selSetWantsLayer, true)
 		bgLayer := send(bg, selLayer)
@@ -212,6 +225,19 @@ func (c *candWindow) ensure() bool {
 		// 投影要在 addSubview 之后挂：AppKit 会在挂进视图树时重置
 		// backing layer 的投影属性，NSView.shadow 才是它认的入口。
 		send(bg, selSetShadow, c.shadow)
+
+		// 序号在固定宽度的槽位里居中，候选正文从槽位右侧开始。
+		label := send(send(objc.ID(objc.GetClass("NSTextField")), selAlloc), selInitWithFrame, NSRect{W: 10, H: 10})
+		send(label, selSetBezeled, false)
+		send(label, selSetDrawsBackground, false)
+		send(label, selSetEditable, false)
+		send(label, selSetSelectable, false)
+		send(label, selSetFont, c.labelFont)
+		send(label, selSetSingleLine, true)
+		send(label, selSetLineBreak, uintptr(2)) // NSLineBreakByClipping
+		send(label, selSetAlignment, uintptr(2)) // NSTextAlignmentCenter
+		send(label, selSetHidden, true)
+		send(content, selAddSubview, label)
 
 		chip := send(send(objc.ID(objc.GetClass("NSTextField")), selAlloc), selInitWithFrame, NSRect{W: 10, H: 10})
 		send(chip, selSetBezeled, false)
@@ -224,7 +250,7 @@ func (c *candWindow) ensure() bool {
 		send(chip, selSetLineBreak, uintptr(2)) // NSLineBreakByClipping
 		send(chip, selSetHidden, true)
 		send(content, selAddSubview, chip)
-		c.bg[i], c.chips[i] = bg, chip
+		c.bg[i], c.labels[i], c.chips[i] = bg, label, chip
 	}
 
 	c.panel, c.content = panel, content
@@ -240,11 +266,17 @@ func (c *candWindow) showCandidates(cands []engine.Candidate, caret NSRect) {
 	c.layout(candidateItems(cands), 0, caret)
 }
 
-// candidateItems 把候选拼成「1.你好」「2.你」这样的显示文本。
-func candidateItems(cands []engine.Candidate) []string {
-	items := make([]string, len(cands))
+// candidateItem 是一个候选的两个显示部分：序号和正文分开排版。
+type candidateItem struct {
+	label string
+	text  string
+}
+
+// candidateItems 拆出序号和候选正文，序号只负责提示按哪个数字选。
+func candidateItems(cands []engine.Candidate) []candidateItem {
+	items := make([]candidateItem, len(cands))
 	for i, c := range cands {
-		items[i] = strconv.Itoa(i+1) + "." + c.Text
+		items[i] = candidateItem{label: strconv.Itoa(i+1) + ".", text: c.Text}
 	}
 	return items
 }
@@ -255,7 +287,7 @@ func (c *candWindow) showText(text string, caret NSRect) {
 		return
 	}
 	c.hud = true
-	c.layout([]string{text}, -1, caret)
+	c.layout([]candidateItem{{text: text}}, -1, caret)
 }
 
 // lightAppearance 判断系统当前是不是浅色外观。按 NSApp.effectiveAppearance
@@ -275,52 +307,95 @@ func (c *candWindow) lightAppearance() bool {
 }
 
 // layout 依次排好色块，再按内容调整面板大小和位置。
-func (c *candWindow) layout(items []string, selected int, caret NSRect) {
+func (c *candWindow) layout(items []candidateItem, selected int, caret NSRect) {
 	// 每次绘制都按系统当前深浅选一遍配色：面板开着时用户切深浅模式，
 	// 下一次出候选就跟着变了，不用额外监听通知。
 	light := c.lightAppearance()
-	panelBG, dimText := c.panelBGDark, c.dim
+	panelBG, dimText, labelDim := c.panelBGDark, c.dim, c.labelDim
 	if light {
-		panelBG, dimText = c.panelBGLt, c.dimLt
+		panelBG, dimText, labelDim = c.panelBGLt, c.dimLt, c.labelDimLt
 	}
 	send(send(c.content, selLayer), selSetBackgroundColor, panelBG)
 
 	x, maxH := candOuter, 0.0
 	for i := range c.chips {
-		bg, chip := c.bg[i], c.chips[i]
+		bg, label, chip := c.bg[i], c.labels[i], c.chips[i]
 		if i >= len(items) {
 			send(bg, selSetHidden, true)
+			send(label, selSetHidden, true)
 			send(chip, selSetHidden, true)
 			continue
 		}
 		send(bg, selSetHidden, false)
 		send(chip, selSetHidden, false)
 
-		ns := nsString(items[i])
+		item := items[i]
+		hasLabel := item.label != ""
+		send(label, selSetHidden, !hasLabel)
+
+		ns := nsString(item.text)
 		send(chip, selSetStringValue, ns)
 		size := objc.Send[NSSize](ns, selSizeWithAttributes, c.attrs)
 		send(ns, selRelease)
 		if !(size.X > 0) || !(size.Y > 0) {
 			// 量不出来就退回按字数估，绝不把 NaN 传给 setFrame。
-			size = NSSize{X: float64(utf16Len(items[i])) * candFontSize * 0.9, Y: candFontSize * 1.3}
+			size = NSSize{X: float64(utf16Len(item.text)) * candFontSize * 0.9, Y: candFontSize * 1.3}
+		}
+
+		// 序号单独量高度，然后在固定槽位里垂直居中；槽宽不随数字变化。
+		labelHeight := candLabelSize * 1.3
+		if hasLabel {
+			lns := nsString(item.label)
+			send(label, selSetStringValue, lns)
+			lsize := objc.Send[NSSize](lns, selSizeWithAttributes, c.labelAttrs)
+			send(lns, selRelease)
+			if lsize.Y > 0 {
+				labelHeight = math.Ceil(lsize.Y)
+			}
 		}
 
 		bgLayer := send(bg, selLayer)
 		if i == selected {
 			send(chip, selSetTextColor, c.label)
+			if hasLabel {
+				send(label, selSetTextColor, c.label)
+			}
 			c.setTint(bgLayer, !light)
 		} else {
 			send(chip, selSetTextColor, dimText)
+			if hasLabel {
+				send(label, selSetTextColor, labelDim)
+			}
 			send(bgLayer, selSetBackgroundColor, c.clearBG)
 		}
 
-		// 色块 = 文字 + 两侧内边距；文字视图的尺寸就是实测文字大小，
-		// 放在色块内边距的位置上，这样文字必然是居中的（不依赖 cell 的对齐）。
+		// 色块 = 序号槽 + 间距 + 正文 + 两侧内边距；两个文字视图的尺寸
+		// 都是实测大小，放在色块内计算好的位置上，不依赖 cell 的对齐。
 		tw, th := math.Ceil(size.X)+2, math.Ceil(size.Y)
-		w, h := tw+2*candPadX, th+2*candPadY
+		innerH := math.Max(th, labelHeight)
+		w := tw + 2*candPadX
+		if hasLabel {
+			w += candLabelSlot + candLabelGap
+		}
+		h := innerH + 2*candPadY
 		xr := math.Round(x)
+		textX := xr + candPadX
 		send(bg, selSetFrame, NSRect{X: xr, Y: candOuter, W: w, H: h})
-		send(chip, selSetFrame, NSRect{X: xr + candPadX, Y: candOuter + candPadY, W: tw, H: th})
+		if hasLabel {
+			send(label, selSetFrame, NSRect{
+				X: textX,
+				Y: candOuter + candPadY + (innerH-labelHeight)/2,
+				W: candLabelSlot,
+				H: labelHeight,
+			})
+			textX += candLabelSlot + candLabelGap
+		}
+		send(chip, selSetFrame, NSRect{
+			X: textX,
+			Y: candOuter + candPadY + (innerH-th)/2,
+			W: tw,
+			H: th,
+		})
 		x += w + candGap
 		maxH = max(maxH, h)
 	}

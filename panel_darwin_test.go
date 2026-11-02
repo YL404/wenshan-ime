@@ -35,7 +35,11 @@ func TestCandidatePanel(t *testing.T) {
 		t.Fatal("候选窗创建失败")
 	}
 	caret := NSRect{X: 300, Y: 400, W: 2, H: 16}
-	cand.layout([]string{"1.你好", "2.你", "3.我"}, 0, caret)
+	cand.layout([]candidateItem{
+		{label: "1.", text: "你好"},
+		{label: "2.", text: "你"},
+		{label: "3.", text: "我"},
+	}, 0, caret)
 	f := objc.Send[NSRect](cand.panel, selFrame)
 	t.Logf("三个候选: frame = %+v", f)
 	if f.W < 100 || f.H < 20 {
@@ -47,7 +51,7 @@ func TestCandidatePanel(t *testing.T) {
 
 	// 提示只有一个色块，应该窄一些。
 	wide := f.W
-	cand.layout([]string{"英文"}, -1, caret)
+	cand.layout([]candidateItem{{text: "英文"}}, -1, caret)
 	f = objc.Send[NSRect](cand.panel, selFrame)
 	t.Logf("模式提示: frame = %+v", f)
 	if f.W >= wide || f.W < 30 {
@@ -99,8 +103,13 @@ func TestRenderPanel(t *testing.T) {
 	if !cand.ensure() {
 		t.Fatal("候选窗创建失败")
 	}
-	cand.layout([]string{"1.一般", "2.一半", "3.已办", "4.一班", "5.一版"}, 0,
-		NSRect{X: 300, Y: 400, W: 2, H: 16})
+	cand.layout([]candidateItem{
+		{label: "1.", text: "一般"},
+		{label: "2.", text: "一半"},
+		{label: "3.", text: "已办"},
+		{label: "4.", text: "一班"},
+		{label: "5.", text: "一版"},
+	}, 0, NSRect{X: 300, Y: 400, W: 2, H: 16})
 	for i := 0; i < 5; i++ {
 		t.Logf("chip[%d] bg=%+v text=%+v", i,
 			objc.Send[NSRect](cand.bg[i], selFrame), objc.Send[NSRect](cand.chips[i], selFrame))

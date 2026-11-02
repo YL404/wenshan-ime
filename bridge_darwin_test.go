@@ -41,7 +41,9 @@ func TestObjCBridge(t *testing.T) {
 
 func TestCandidateItems(t *testing.T) {
 	items := candidateItems([]engine.Candidate{{Text: "你好"}, {Text: "你"}})
-	if len(items) != 2 || items[0] != "1.你好" || items[1] != "2.你" {
+	if len(items) != 2 ||
+		items[0].label != "1." || items[0].text != "你好" ||
+		items[1].label != "2." || items[1].text != "你" {
 		t.Fatalf("items = %v", items)
 	}
 }
