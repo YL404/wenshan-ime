@@ -144,6 +144,9 @@ func (c *candWindow) ensure() bool {
 	c.panelBG = keep(send(c.panelColor, selCGColor))
 	c.chipBG = keep(send(c.chipColor, selCGColor))
 	c.clearBG = keep(send(c.clearColor, selCGColor))
+	// 圆角只裁内容图层自己，裁不掉窗口的背景色；窗口默认背景接近白色，
+	// 会从四个圆角缺口露出来，所以窗口背景必须设成透明。
+	send(panel, selSetBackgroundColor, c.clearColor)
 	// sizeWithAttributes: 直接量文字本身，避免把 NSTextField 的 cell 边距也算进色块。
 	fontKey := nsString("NSFont")
 	c.attrs = keep(send(objc.ID(objc.GetClass("NSDictionary")), selDictWithObject, c.font, fontKey))
