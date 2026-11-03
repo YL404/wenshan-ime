@@ -288,9 +288,9 @@ func toggleAscii(self objc.ID) {
 	}
 	applyPreedit(curClient)
 	if res.Mode == input.English {
-		showHud(self, "英文")
+		showHud(self, "英")
 	} else {
-		showHud(self, "中文")
+		showHud(self, "中")
 	}
 }
 
@@ -303,7 +303,7 @@ func activateServer(self objc.ID, cmd objc.SEL, sender objc.ID) {
 	logf("activate mode=%v", sess.Mode())
 	// 英文模式下切回来要能看见状态，否则就像「打不出中文」。
 	if sess.Mode() == input.English {
-		showHud(self, "英文")
+		showHud(self, "英")
 	}
 }
 

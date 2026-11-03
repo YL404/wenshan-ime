@@ -51,7 +51,7 @@ func TestCandidatePanel(t *testing.T) {
 
 	// 提示只有一个色块，应该窄一些。
 	wide := f.W
-	cand.layout([]candidateItem{{text: "英文"}}, -1, caret)
+	cand.layout([]candidateItem{{text: "英"}}, -1, caret)
 	f = objc.Send[NSRect](cand.panel, selFrame)
 	t.Logf("模式提示: frame = %+v", f)
 	if f.W >= wide || f.W < 30 {
