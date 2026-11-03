@@ -13,8 +13,8 @@ import (
 // NSWindowStyleMaskNonactivatingPanel，所以点它不会抢走当前 App 的焦点。
 //
 // 外观：面板背景是圆角的图层，每个候选是一个独立的圆角色块，
-// 选中的那个铺一层强调色淡底，再带一点投影浮起来。这样高亮块自带
-// 内边距和圆角，比给整行文字加背景色好看。同一个面板也用来显示
+// 选中的那个铺实心强调色、文字转白，和系统候选窗一致。这样高亮块
+// 自带内边距和圆角，比给整行文字加背景色好看。同一个面板也用来显示
 // 模式提示（中文/英文/全角/半角）。
 
 var (
@@ -59,17 +59,10 @@ var (
 	selSetMasksToBounds = objc.RegisterName("setMasksToBounds:")
 	selCGColor          = objc.RegisterName("CGColor")
 
-	selSetShadow       = objc.RegisterName("setShadow:")
-	selInit            = objc.RegisterName("init")
-	selSetShadowOffset = objc.RegisterName("setShadowOffset:")
-	selSetShadowBlur   = objc.RegisterName("setShadowBlurRadius:")
-	selSetShadowColor  = objc.RegisterName("setShadowColor:")
-
 	selColorWithCalibratedWhite = objc.RegisterName("colorWithCalibratedWhite:alpha:")
-	selColorWithCalibratedRed   = objc.RegisterName("colorWithCalibratedRed:green:blue:alpha:")
-	selBlendedColor             = objc.RegisterName("blendedColorWithFraction:ofColor:")
 	selControlAccentColor       = objc.RegisterName("controlAccentColor")
-	selLabelColor               = objc.RegisterName("labelColor")
+	selSelectedContentBG        = objc.RegisterName("selectedContentBackgroundColor")
+	selAlternateSelectedText    = objc.RegisterName("alternateSelectedControlTextColor")
 	selClearColor               = objc.RegisterName("clearColor")
 	selSystemFontOfSize         = objc.RegisterName("systemFontOfSize:")
 	selArrayWithCapacity        = objc.RegisterName("arrayWithCapacity:")
@@ -108,7 +101,6 @@ type candWindow struct {
 	// 不 retain 的话事件循环一结束就成了野指针。
 	font       objc.ID
 	labelFont  objc.ID // 序号字体，比候选小一号
-	label      objc.ID // 选中文字：跟随系统标签色，深浅外观自动变
 	dim        objc.ID // 未选中文字：深色面板配浅灰字
 	dimLt      objc.ID // 未选中文字：浅色面板配深灰字
 	labelDim   objc.ID // 未选中序号：比候选文字再弱一档
@@ -124,10 +116,7 @@ type candWindow struct {
 
 	panelBGDark objc.ID // CGColor：深色面板底
 	panelBGLt   objc.ID // CGColor：浅色面板底
-	panelDark   objc.ID // NSColor：深色面板底，和强调色混淡底用
-	panelLt     objc.ID // NSColor：浅色面板底
 	clearBG     objc.ID // CGColor
-	shadow      objc.ID // NSShadow：高亮块的投影
 
 	// 查系统当前深浅用的缓存：候选外观名数组 + 深色名。
 	appearances objc.ID
@@ -159,8 +148,6 @@ func (c *candWindow) ensure() bool {
 
 	c.font = keep(send(objc.ID(objc.GetClass("NSFont")), selSystemFontOfSize, candFontSize))
 	c.labelFont = keep(send(objc.ID(objc.GetClass("NSFont")), selSystemFontOfSize, candLabelSize))
-	// 选中文字用系统标签色：浅色外观是近黑，深色外观是白，淡蓝底上都够清楚。
-	c.label = keep(send(objc.ID(objc.GetClass("NSColor")), selLabelColor))
 	// 未选中文字备深浅两套：深色面板配浅灰字，浅色面板配深灰字。
 	c.dim = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.82, 1.0))
 	c.dimLt = keep(send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.15, 1.0))
@@ -170,22 +157,11 @@ func (c *candWindow) ensure() bool {
 	// 面板底也备深浅两套：深色是 HUD 风，浅色接近系统候选条的白底。
 	darkPanel := send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.12, 0.97)
 	lightPanel := send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.98, 0.97)
-	// 高亮底不能用缓存的 CGColor：强调色和深浅一变，旧值就定死了。
-	// 每次绘制时按当前外观现取，见 setTint。
+	// 高亮底用的是动态色，CGColor 一取就定死，所以每次绘制现取，见 setSelected。
 	c.clearColor = keep(send(objc.ID(objc.GetClass("NSColor")), selClearColor))
-	c.panelDark = keep(darkPanel)
-	c.panelLt = keep(lightPanel)
-	c.panelBGDark = keep(send(c.panelDark, selCGColor))
-	c.panelBGLt = keep(send(c.panelLt, selCGColor))
+	c.panelBGDark = keep(send(darkPanel, selCGColor))
+	c.panelBGLt = keep(send(lightPanel, selCGColor))
 	c.clearBG = keep(send(c.clearColor, selCGColor))
-	// 高亮块的投影走 NSView.shadow：直接改 backing layer 的 shadowOpacity，
-	// 会在 addSubview 时被 AppKit 清零；这个对象反而留得住。
-	shadow := send(send(objc.ID(objc.GetClass("NSShadow")), selAlloc), selInit)
-	send(shadow, selSetShadowOffset, NSSize{X: 0, Y: -1.5})
-	send(shadow, selSetShadowBlur, 3.0)
-	send(shadow, selSetShadowColor, send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 0.0, 0.22))
-	// alloc/init 已经持有一份，不用再 keep。
-	c.shadow = shadow
 	// 外观名数组缓存下来，绘制时查系统当前深浅（「自动」外观也能拿到当时的实际值）。
 	c.darkName = keep(nsString("NSAppearanceNameDarkAqua"))
 	aqua := nsString("NSAppearanceNameAqua")
@@ -222,9 +198,6 @@ func (c *candWindow) ensure() bool {
 		send(bgLayer, selSetCornerRadius, chipRadius)
 		send(bg, selSetHidden, true)
 		send(content, selAddSubview, bg)
-		// 投影要在 addSubview 之后挂：AppKit 会在挂进视图树时重置
-		// backing layer 的投影属性，NSView.shadow 才是它认的入口。
-		send(bg, selSetShadow, c.shadow)
 
 		// 序号在固定宽度的槽位里居中，候选正文从槽位右侧开始。
 		label := send(send(objc.ID(objc.GetClass("NSTextField")), selAlloc), selInitWithFrame, NSRect{W: 10, H: 10})
@@ -356,11 +329,7 @@ func (c *candWindow) layout(items []candidateItem, selected int, caret NSRect) {
 
 		bgLayer := send(bg, selLayer)
 		if i == selected {
-			send(chip, selSetTextColor, c.label)
-			if hasLabel {
-				send(label, selSetTextColor, c.label)
-			}
-			c.setTint(bgLayer, !light)
+			c.setSelected(bgLayer, chip, label, hasLabel)
 		} else {
 			send(chip, selSetTextColor, dimText)
 			if hasLabel {
@@ -432,20 +401,23 @@ func (c *candWindow) layout(items []candidateItem, selected int, caret NSRect) {
 	}
 }
 
-// setTint 给选中的色块铺一层强调色淡底。强调色是动态色，它的 CGColor
-// 一取就定死，所以每次绘制现取；系统换强调色或深浅外观后，下一帧就跟上。
-// 和面板底色混成不透明色：半透明底会让背后的投影透出来，色块发脏。
-// 深色面板上多掺一点，不然淡蓝底几乎看不出来。
-func (c *candWindow) setTint(layer objc.ID, dark bool) {
-	accent := send(objc.ID(objc.GetClass("NSColor")), selControlAccentColor)
-	if accent == 0 {
-		accent = send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedRed, 0.20, 0.45, 0.85, 1.0)
+// setSelected 把选中的色块铺成实心强调色、文字换成白色。用的是一对系统
+// 选中态语义色：强调色改成黄、灰时这对色会一起变，白字始终压得住底。
+// 两个都是动态色，CGColor 一取就定死，所以每次绘制现取。
+func (c *candWindow) setSelected(layer, chip, label objc.ID, hasLabel bool) {
+	fill := send(objc.ID(objc.GetClass("NSColor")), selSelectedContentBG)
+	text := send(objc.ID(objc.GetClass("NSColor")), selAlternateSelectedText)
+	if fill == 0 {
+		fill = send(objc.ID(objc.GetClass("NSColor")), selControlAccentColor)
 	}
-	panel, alpha := c.panelLt, 0.22
-	if dark {
-		panel, alpha = c.panelDark, 0.30
+	if text == 0 {
+		text = send(objc.ID(objc.GetClass("NSColor")), selColorWithCalibratedWhite, 1.0, 1.0)
 	}
-	if cg := send(send(panel, selBlendedColor, alpha, accent), selCGColor); cg != 0 {
+	send(chip, selSetTextColor, text)
+	if hasLabel {
+		send(label, selSetTextColor, text)
+	}
+	if cg := send(fill, selCGColor); cg != 0 {
 		send(layer, selSetBackgroundColor, cg)
 	}
 }
