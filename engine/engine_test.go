@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -158,6 +159,28 @@ func TestPaging(t *testing.T) {
 	}
 	if len(e.Buffer()) != 0 || len(e.Candidates()) != 0 {
 		t.Fatal("选词后没有清空")
+	}
+}
+
+// 候选够多时能翻到 maxPages 页，再往后停住。
+func TestPagingLimit(t *testing.T) {
+	entries := make([]Entry, 0, 1000)
+	for i := 0; i < 1000; i++ {
+		entries = append(entries, Entry{
+			Code:   "ni",
+			Text:   strconv.Itoa(i),
+			Weight: uint32(10000 - i),
+		})
+	}
+	e := New(buildDict(t, entries))
+	e.Type('n')
+	e.Type('i')
+	pages := 1
+	for e.Page(1) {
+		pages++
+	}
+	if pages != maxPages {
+		t.Fatalf("可翻 %d 页，期望上限 %d 页", pages, maxPages)
 	}
 }
 

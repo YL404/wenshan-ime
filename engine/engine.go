@@ -10,8 +10,10 @@ const (
 	maxCandidates = 9
 	// pageSize 是一页的候选数，对应数字键 1-9。
 	pageSize = maxCandidates
-	// maxPages 是候选总页数。更深的候选质量低，翻页只做到 3 页。
-	maxPages = 3
+	// maxPages 是候选总页数上限。多音节输入的候选池通常不到 180 个
+	// （jintian 137、womf 175），20 页基本能翻完；单音节前缀能拖出
+	// 几千个词，更深的候选价值低，一次性构建也会拖慢主线程。
+	maxPages = 20
 )
 
 // Engine 持有一次输入过程的全部状态。它只在主线程上被调用，不加锁。
