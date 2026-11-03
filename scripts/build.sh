@@ -19,10 +19,16 @@ cp packaging/Info.plist "$app/Contents/Info.plist"
 cp -R packaging/zh-Hans.lproj packaging/en.lproj "$app/Contents/Resources/"
 go run ./cmd/icon -out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset
 iconutil -c icns build/Wenshan.iconset -o "$app/Contents/Resources/Wenshan.icns"
-# 菜单栏用 16 pt 模板图；32×32@144dpi 正好是 2x。
+# 输入源图标是 22×16 pt：系统按屏幕倍率取 1x/2x 帧，和它自己的 TIFF 一样。
+sips -s format tiff -s dpiWidth 72 -s dpiHeight 72 \
+	build/WenshanMenu.iconset/icon_22x16.png \
+	--out build/.menu-1x.tiff >/dev/null
 sips -s format tiff -s dpiWidth 144 -s dpiHeight 144 \
-	build/WenshanMenu.iconset/icon_16x16@2x.png \
-	--out "$app/Contents/Resources/WenshanMenu.tiff" >/dev/null
+	build/WenshanMenu.iconset/icon_22x16@2x.png \
+	--out build/.menu-2x.tiff >/dev/null
+tiffutil -cat build/.menu-1x.tiff build/.menu-2x.tiff \
+	-out "$app/Contents/Resources/WenshanMenu.tiff" >/dev/null
+rm -f build/.menu-1x.tiff build/.menu-2x.tiff
 printf 'APPL????' > "$app/Contents/PkgInfo"
 # 用固定身份签名（Apple Development 证书）能让系统把每次构建认成同一个应用，
 # TCC 授权（"允许启用"）不会因为重新编译而重置。不设就用 ad-hoc。

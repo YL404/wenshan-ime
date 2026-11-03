@@ -1,10 +1,10 @@
 // Command icon 画文山输入法的图标：纸色圆角方形 + 分层墨色山峦 + 红日 + 云带，
-// 同时输出菜单栏用的单色方块镂空图标。
+// 同时输出输入源列表和菜单栏用的 22×16 单色镂空图标。
 //
 //	go run ./cmd/icon -out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset
 //
 // 图形直接用扫描线填充画，不依赖任何绘图库：山脊是二次贝塞尔采样成的多段折线，
-// 云带用半透明晕染。每档先放大四倍再降采样，小尺寸也有干净的边缘。
+// 云带用半透明晕染。每档先放大数倍再降采样，小尺寸也有干净的边缘。
 package main
 
 import (
@@ -50,20 +50,24 @@ var iconset = []struct {
 	{"icon_512x512@2x.png", 1024},
 }
 
-// menuIcons 是菜单栏模板图的 1x/2x 两档。
+// menuIcons 是输入源模板图的 1x/2x 两档。macOS 27 的系统输入法图标是
+// 22×16 的连续圆角底板，“键盘 → 输入源”列表和菜单栏都按这个尺寸画。
 var menuIcons = []struct {
 	name string
-	size int
+	w, h int
 }{
-	{"icon_16x16.png", 16},
-	{"icon_16x16@2x.png", 32},
+	{"icon_22x16.png", 22, 16},
+	{"icon_22x16@2x.png", 44, 32},
 }
+
+// menuW 是列表图标的点宽度，也是山形坐标的基准。
+const menuW = 22
 
 func main() {
 	out := flag.String("out", "build/Wenshan.iconset", "App 图标的 iconset 目录")
-	menuOut := flag.String("menu-out", "build/WenshanMenu.iconset", "菜单栏图标的 iconset 目录")
+	menuOut := flag.String("menu-out", "build/WenshanMenu.iconset", "输入源图标的 iconset 目录")
 	preview := flag.String("preview", "", "另外输出一张 App 图标预览图")
-	menuPreview := flag.String("menu-preview", "", "另外输出一张菜单栏图标预览图")
+	menuPreview := flag.String("menu-preview", "", "另外输出一张输入源图标预览图")
 	flag.Parse()
 
 	for _, dir := range []string{*out, *menuOut} {
@@ -77,7 +81,7 @@ func main() {
 		}
 	}
 	for _, it := range menuIcons {
-		if err := writePNG(filepath.Join(*menuOut, it.name), renderMenu(it.size)); err != nil {
+		if err := writePNG(filepath.Join(*menuOut, it.name), renderMenu(it.w, it.h)); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -90,7 +94,7 @@ func main() {
 		fmt.Println(*preview)
 	}
 	if *menuPreview != "" {
-		if err := writePNG(*menuPreview, renderMenu(128)); err != nil {
+		if err := writePNG(*menuPreview, renderMenu(88, 64)); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println(*menuPreview)
@@ -130,17 +134,21 @@ func renderApp(size int) *image.RGBA {
 	return out
 }
 
-// renderMenu 画菜单栏模板：圆角方块挖掉一座山。
-func renderMenu(size int) *image.RGBA {
-	ss := 4
-	w := size * ss
-	img := image.NewRGBA(image.Rect(0, 0, w, w))
-	scale := float64(w) / 16
+// mountain 是输入源图标里挖空的山形，坐标按 22×16 的底板中心对齐。
+var mountain = []point{
+	{5.2, 12.8}, {7.8, 7.2}, {9.0, 8.8}, {11.2, 3.2}, {16.8, 12.8},
+}
 
-	fillRoundedRect(img, menuInk, 0, 0, 16*scale, 16*scale, 3.6*scale)
-	clear(img, scalePoints([]point{
-		{2.2, 13.2}, {4.8, 7.6}, {6, 9.2}, {8.2, 3.6}, {13.8, 13.2},
-	}, scale))
+// renderMenu 画输入源模板：22×16 连续圆角底板挖掉一座山。
+// 底板尺寸和圆角跟 macOS 27 系统输入法图标对齐，和 ABC、双拼并排时
+// 宽高一致；8 倍超采样让圆角边缘和系统图标一样平滑。
+func renderMenu(w, h int) *image.RGBA {
+	ss := 8
+	img := image.NewRGBA(image.Rect(0, 0, w*ss, h*ss))
+	s := float64(w) / menuW * float64(ss)
+
+	fillContinuousRoundedRect(img, menuInk, 0, 0, float64(w*ss), float64(h*ss), 6.5*s, 2.8)
+	clear(img, scalePoints(mountain, s))
 
 	return downsample(img, ss)
 }
@@ -277,8 +285,9 @@ func fillA(img *image.RGBA, c color.RGBA, alpha float64, pts []point) {
 	}
 }
 
-// fillRoundedRect 画实心圆角矩形。边界在放大后的像素空间里，降采样负责抗锯齿。
-func fillRoundedRect(img *image.RGBA, c color.RGBA, x0, y0, x1, y1, r float64) {
+// fillContinuousRoundedRect 画连续圆角矩形：四角用超椭圆过渡，直边保持平直。
+// r 是圆角半径，n 越大越接近方角；r/n 都按放大后的像素计。
+func fillContinuousRoundedRect(img *image.RGBA, c color.RGBA, x0, y0, x1, y1, r, n float64) {
 	for y := int(math.Floor(y0)); y < int(math.Ceil(y1)); y++ {
 		for x := int(math.Floor(x0)); x < int(math.Ceil(x1)); x++ {
 			px, py := float64(x)+0.5, float64(y)+0.5
@@ -287,8 +296,9 @@ func fillRoundedRect(img *image.RGBA, c color.RGBA, x0, y0, x1, y1, r float64) {
 			}
 			cx := math.Max(x0+r, math.Min(px, x1-r))
 			cy := math.Max(y0+r, math.Min(py, y1-r))
-			dx, dy := px-cx, py-cy
-			if dx*dx+dy*dy <= r*r {
+			dx := math.Abs(px-cx) / r
+			dy := math.Abs(py-cy) / r
+			if math.Pow(dx, n)+math.Pow(dy, n) <= 1 {
 				img.SetRGBA(x, y, c)
 			}
 		}
@@ -331,9 +341,10 @@ func maskSquircle(img *image.RGBA) {
 // downsample 按 ss×ss 块求平均。image.RGBA 是预乘 alpha，直接平均即可。
 func downsample(img *image.RGBA, ss int) *image.RGBA {
 	w := img.Bounds().Dx() / ss
-	out := image.NewRGBA(image.Rect(0, 0, w, w))
+	h := img.Bounds().Dy() / ss
+	out := image.NewRGBA(image.Rect(0, 0, w, h))
 	n := uint32(ss * ss)
-	for y := range w {
+	for y := range h {
 		for x := range w {
 			var r, g, b, a uint32
 			for dy := range ss {
