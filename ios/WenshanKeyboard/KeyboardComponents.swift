@@ -205,7 +205,22 @@ final class KeyButton: UIButton {
     }
 
     override var isHighlighted: Bool {
-        didSet { updateBackground() }
+        didSet {
+            updateBackground()
+            updatePressScale()
+        }
+    }
+
+    private func updatePressScale() {
+        UIView.animate(
+            withDuration: 0.06,
+            delay: 0,
+            options: [.allowUserInteraction, .beginFromCurrentState]
+        ) {
+            self.transform = self.isHighlighted
+                ? CGAffineTransform(scaleX: 0.96, y: 0.96)
+                : .identity
+        }
     }
 
     func setActive(_ active: Bool) {
@@ -308,6 +323,7 @@ final class KeyButton: UIButton {
         touchActive = false
         isDragging = false
         cancelTimers()
+        if !isHighlighted { transform = .identity }
         onPressChanged?(false)
     }
 
@@ -395,10 +411,23 @@ final class KeyPreviewView: UIView {
             y = min(keyFrame.maxY + 4, container.bounds.height - height - 4)
         }
         frame = CGRect(x: x, y: y, width: width, height: height)
-        isHidden = false
+        if isHidden {
+            alpha = 0
+            transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            isHidden = false
+            UIView.animate(withDuration: 0.08, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+                self.alpha = 1
+                self.transform = .identity
+            }
+        } else {
+            alpha = 1
+            transform = .identity
+        }
     }
 
     func hide() {
         isHidden = true
+        alpha = 1
+        transform = .identity
     }
 }

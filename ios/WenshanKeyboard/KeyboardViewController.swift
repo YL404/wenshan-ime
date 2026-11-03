@@ -9,6 +9,7 @@ final class KeyboardViewController: UIInputViewController {
     private let toolbarBar = ToolbarBar()
     private let candidateBar = CandidateBar()
     private let candidatePanel = CandidatePanel()
+    private let symbolPanel = SymbolPanelView()
     private let topBar = UIView()
     private let keyboardStack = UIStackView()
     private let root = UIStackView()
@@ -25,19 +26,18 @@ final class KeyboardViewController: UIInputViewController {
     private var returnButton: KeyButton?
     private var punctuationButton: KeyButton?
     private weak var previewedButton: KeyButton?
-    private var symbolsOn = false
+    private var layer: Layer = .letters
     private var hasMarkedText = false
     private var isApplyingText = false
     private var isCandidatePanelOpen = false
+    private var isSymbolPanelOpen = false
+
+    private enum Layer {
+        case letters
+        case numbers
+    }
 
     private let letterRows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
-    private let symbolRows = ["1234567890", "-/:;()¥&@\"", "。？！，、；：…"]
-    private static let symbolAlternates: [String: String] = [
-        "。": "…", "，": "、", "？": "！", "！": "？",
-        "：": "；", "；": "：", "、": "，", "…": "。",
-        "-": "—", "/": "\\", "(": "[", ")": "]",
-        "¥": "$", "@": "#", "&": "*", "\"": "'", "'": "\"",
-    ]
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -59,6 +59,10 @@ final class KeyboardViewController: UIInputViewController {
         if model.phase != .ready {
             loadEngine()
         }
+        closeCandidatePanel()
+        closeSymbolPanel()
+        layer = .letters
+        renderKeyboardRows()
         render()
     }
 
@@ -70,16 +74,20 @@ final class KeyboardViewController: UIInputViewController {
         clearMarkedText()
         hidePreview()
         closeCandidatePanel()
+        closeSymbolPanel()
         candidateBar.setCandidates([])
     }
     /// 外部改正文：只在组合态重置，避免每次选词都误清状态。
     override func textDidChange(_ textInput: UITextInput?) {
-        guard !isApplyingText, model.isComposing else { return }
+        guard !isApplyingText else { return }
+        closeSymbolPanel()
+        guard model.isComposing else { return }
         model.reset()
         render()
     }
 
     override func selectionWillChange(_ textInput: UITextInput?) {
+        closeSymbolPanel()
         guard model.isComposing else { return }
         model.reset()
         clearMarkedText()
@@ -87,6 +95,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     override func selectionDidChange(_ textInput: UITextInput?) {
+        closeSymbolPanel()
         guard model.isComposing else { return }
         model.reset()
         clearMarkedText()
@@ -141,12 +150,14 @@ final class KeyboardViewController: UIInputViewController {
         candidateBar.onSelect = { [weak self] index in
             guard let self else { return }
             self.closeCandidatePanel()
+            self.closeSymbolPanel()
             self.playSelectionFeedback()
             self.apply(self.model.select(index))
         }
         candidateBar.onSelectChar = { [weak self] index, last in
             guard let self else { return }
             self.closeCandidatePanel()
+            self.closeSymbolPanel()
             self.playSelectionFeedback()
             self.apply(self.model.selectChar(index, last: last))
         }
@@ -156,6 +167,7 @@ final class KeyboardViewController: UIInputViewController {
         candidateBar.onDismiss = { [weak self] in
             guard let self else { return }
             self.closeCandidatePanel()
+            self.closeSymbolPanel()
             self.dismissKeyboard()
         }
         toolbarBar.onToggleFullWidth = { [weak self] in
@@ -165,6 +177,7 @@ final class KeyboardViewController: UIInputViewController {
         toolbarBar.onDismiss = { [weak self] in
             guard let self else { return }
             self.closeCandidatePanel()
+            self.closeSymbolPanel()
             self.dismissKeyboard()
         }
         toolbarBar.setStatus("加载中…")
@@ -176,8 +189,20 @@ final class KeyboardViewController: UIInputViewController {
         candidatePanel.onSelect = { [weak self] index in
             guard let self else { return }
             self.closeCandidatePanel()
+            self.closeSymbolPanel()
             self.playSelectionFeedback()
             self.apply(self.model.selectGlobal(index))
+        }
+
+        symbolPanel.isHidden = true
+        symbolPanel.onInsert = { [weak self] symbol in
+            guard let self else { return }
+            self.closeSymbolPanel()
+            self.playSelectionFeedback()
+            self.apply(self.model.insert(symbol))
+        }
+        symbolPanel.onClose = { [weak self] in
+            self?.closeSymbolPanel()
         }
 
         keyboardStack.axis = .vertical
@@ -194,6 +219,7 @@ final class KeyboardViewController: UIInputViewController {
         root.addArrangedSubview(keyboardStack)
         view.addSubview(root)
         view.addSubview(candidatePanel)
+        view.addSubview(symbolPanel)
         view.addSubview(keyPreview)
 
         NSLayoutConstraint.activate([
@@ -206,6 +232,11 @@ final class KeyboardViewController: UIInputViewController {
             candidatePanel.trailingAnchor.constraint(equalTo: keyboardStack.trailingAnchor),
             candidatePanel.topAnchor.constraint(equalTo: keyboardStack.topAnchor),
             candidatePanel.bottomAnchor.constraint(equalTo: keyboardStack.bottomAnchor),
+
+            symbolPanel.leadingAnchor.constraint(equalTo: keyboardStack.leadingAnchor),
+            symbolPanel.trailingAnchor.constraint(equalTo: keyboardStack.trailingAnchor),
+            symbolPanel.topAnchor.constraint(equalTo: keyboardStack.topAnchor),
+            symbolPanel.bottomAnchor.constraint(equalTo: keyboardStack.bottomAnchor),
         ])
 
         renderKeyboardRows()
@@ -251,22 +282,13 @@ final class KeyboardViewController: UIInputViewController {
         punctuationButton = nil
         hidePreview()
 
-        if symbolsOn {
-            for row in symbolRows {
-                keyboardStack.addArrangedSubview(makeRow(row.map { character in
-                    let text = String(character)
-                    return makeKey(
-                        title: text,
-                        identifier: "key_\(character)",
-                        action: { [weak self] in
-                            guard let self else { return }
-                            self.apply(self.model.insert(text))
-                        },
-                        longPressText: Self.symbolAlternates[text])
-                }))
-            }
-            keyboardStack.addArrangedSubview(makeSymbolBottomRow())
-        } else {
+        switch layer {
+        case .numbers:
+            keyboardStack.addArrangedSubview(makeNumberRow(["1", "2", "3"], trailing: makeDeleteKey()))
+            keyboardStack.addArrangedSubview(makeNumberRow(["4", "5", "6"], trailing: makeNumberSpaceKey()))
+            keyboardStack.addArrangedSubview(makeNumberRow(["7", "8", "9"], trailing: makeNumberReturnKey()))
+            keyboardStack.addArrangedSubview(makeNumberBottomRow())
+        case .letters:
             for (index, row) in letterRows.enumerated() {
                 if index == 2 {
                     keyboardStack.addArrangedSubview(makeLetterBottomRow(row))
@@ -322,6 +344,90 @@ final class KeyboardViewController: UIInputViewController {
         return row
     }
 
+    private func makeNumberRow(_ digits: [String], trailing: KeyButton) -> UIStackView {
+        var keys = digits.map { makeNumberKey($0) }
+        keys.append(trailing)
+        return makeRow(keys)
+    }
+
+    private func makeNumberKey(_ digit: String) -> KeyButton {
+        let key = makeKey(
+            title: digit,
+            identifier: "key_number_\(digit)",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.insert(digit))
+            },
+            font: .systemFont(ofSize: metrics.keyFontSize + 1))
+        key.accessibilityLabel = "数字 \(digit)"
+        return key
+    }
+
+    private func makeNumberSpaceKey() -> KeyButton {
+        let space = makeKey(
+            title: "空格",
+            identifier: "key_space",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.space())
+            },
+            background: KeyboardPalette.functionKey,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
+        space.accessibilityLabel = "空格"
+        configureSpaceKey(space)
+        return space
+    }
+
+    private func makeNumberReturnKey() -> KeyButton {
+        let returnKey = makeKey(
+            title: "换行",
+            identifier: "key_return",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.returnKey())
+            },
+            background: KeyboardPalette.functionKey,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
+        returnKey.accessibilityLabel = "换行"
+        configureReturnKey(returnKey)
+        returnButton = returnKey
+        return returnKey
+    }
+
+    private func makeNumberBottomRow() -> UIStackView {
+        let dot = makeKey(
+            title: ".",
+            identifier: "key_number_dot",
+            action: { [weak self] in
+                guard let self else { return }
+                self.apply(self.model.insert("."))
+            },
+            font: .systemFont(ofSize: metrics.keyFontSize + 1))
+        dot.accessibilityLabel = "小数点"
+
+        let symbols = makeKey(
+            title: "符",
+            identifier: "key_symbol_panel",
+            action: { [weak self] in self?.showSymbols() },
+            background: KeyboardPalette.functionKey,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
+        symbols.accessibilityLabel = "符号"
+
+        let letters = makeKey(
+            title: "ABC",
+            identifier: "key_letters",
+            action: { [weak self] in self?.showLetters() },
+            background: KeyboardPalette.functionKey,
+            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
+            showsPreview: false)
+        letters.accessibilityLabel = "字母"
+
+        return makeRow([dot, makeNumberKey("0"), symbols, letters])
+    }
+
     private func makeLetterBottomRow(_ row: String) -> UIStackView {
         let shift = makeKey(
             title: "⇧",
@@ -357,11 +463,16 @@ final class KeyboardViewController: UIInputViewController {
         let numbers = makeKey(
             title: "123",
             identifier: "key_symbols",
-            action: { [weak self] in self?.toggleSymbols() },
+            action: { [weak self] in self?.showNumbers() },
             background: KeyboardPalette.functionKey,
             font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
             showsPreview: false)
-        numbers.accessibilityLabel = "数字和符号"
+        numbers.accessibilityLabel = "数字"
+        numbers.accessibilityHint = "长按输入符号"
+        numbers.onLongPress = { [weak self] in
+            self?.showSymbols()
+            return true
+        }
 
         let punctuation = makeKey(
             title: "。\n，",
@@ -422,80 +533,18 @@ final class KeyboardViewController: UIInputViewController {
         configureReturnKey(returnKey)
         returnButton = returnKey
 
-        let globe = makeGlobeKey()
         let unit = metrics.letterWidth
-        return makeProportionalRow([
-            (numbers, unit * 1.15),
-            (globe, unit * 0.75),
-            (punctuation, unit * 0.65),
+        var items: [(UIView, CGFloat?)] = [
+            (numbers, max(44, unit * 1.15)),
+            (punctuation, max(44, unit * 0.65)),
             (space, nil),
-            (mode, unit),
-            (returnKey, unit * 1.15),
-        ])
-    }
-
-    private func makeSymbolBottomRow() -> UIStackView {
-        let letters = makeKey(
-            title: "ABC",
-            identifier: "key_letters",
-            action: { [weak self] in self?.toggleSymbols() },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        letters.accessibilityLabel = "字母"
-
-        let mode = makeKey(
-            title: "中\n英",
-            identifier: "key_mode",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.toggleMode())
-            },
-            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)),
-            showsPreview: false)
-        mode.titleLabel?.numberOfLines = 2
-        mode.titleLabel?.textAlignment = .center
-        mode.accessibilityLabel = "切换中英文"
-        modeButton = mode
-
-        let space = makeKey(
-            title: "空格",
-            identifier: "key_space",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.space())
-            },
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        space.accessibilityLabel = "空格"
-        configureSpaceKey(space)
-
-        let delete = makeDeleteKey()
-
-        let returnKey = makeKey(
-            title: "换行",
-            identifier: "key_return",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.returnKey())
-            },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        returnKey.accessibilityLabel = "换行"
-        configureReturnKey(returnKey)
-        returnButton = returnKey
-
-        let globe = makeGlobeKey()
-        let unit = metrics.letterWidth
-        return makeProportionalRow([
-            (letters, unit * 1.15),
-            (globe, unit * 0.75),
-            (mode, unit),
-            (space, nil),
-            (delete, unit),
-            (returnKey, unit * 1.15),
-        ])
+            (mode, max(44, unit)),
+            (returnKey, max(44, unit * 1.15)),
+        ]
+        if needsInputModeSwitchKey {
+            items.insert((makeGlobeKey(), 44), at: 1)
+        }
+        return makeProportionalRow(items)
     }
 
     private func makeKey(
@@ -761,11 +810,46 @@ final class KeyboardViewController: UIInputViewController {
         returnButton?.setActive(model.isReturnKeyProminent)
     }
 
-    private func toggleSymbols() {
+    private func showNumbers() {
         closeCandidatePanel()
-        symbolsOn.toggle()
+        closeSymbolPanel()
+        layer = .numbers
         renderKeyboardRows()
         render()
+    }
+
+    private func showLetters() {
+        closeCandidatePanel()
+        closeSymbolPanel()
+        layer = .letters
+        renderKeyboardRows()
+        render()
+    }
+
+    private func showSymbols() {
+        closeCandidatePanel()
+        guard !isSymbolPanelOpen else { return }
+        hidePreview()
+        symbolPanel.isHidden = false
+        isSymbolPanelOpen = true
+        updateKeyboardStackInteraction()
+        UIAccessibility.post(notification: .screenChanged, argument: symbolPanel)
+    }
+
+    private func closeSymbolPanel() {
+        guard isSymbolPanelOpen else { return }
+        isSymbolPanelOpen = false
+        symbolPanel.isHidden = true
+        updateKeyboardStackInteraction()
+        UIAccessibility.post(
+            notification: .screenChanged,
+            argument: candidateBar.isHidden ? toolbarBar : candidateBar)
+    }
+
+    private func updateKeyboardStackInteraction() {
+        let blocked = isCandidatePanelOpen || isSymbolPanelOpen
+        keyboardStack.accessibilityElementsHidden = blocked
+        keyboardStack.isUserInteractionEnabled = !blocked
     }
 
     private func toggleCandidatePanel() {
@@ -773,14 +857,14 @@ final class KeyboardViewController: UIInputViewController {
             closeCandidatePanel()
             return
         }
+        closeSymbolPanel()
         guard model.isComposing else { return }
         let all = model.allCandidates()
         guard !all.isEmpty else { return }
         candidatePanel.setCandidates(all)
         candidatePanel.isHidden = false
-        keyboardStack.accessibilityElementsHidden = true
-        keyboardStack.isUserInteractionEnabled = false
         isCandidatePanelOpen = true
+        updateKeyboardStackInteraction()
         candidateBar.setExpanded(true)
         UIAccessibility.post(notification: .screenChanged, argument: candidatePanel)
     }
@@ -790,8 +874,7 @@ final class KeyboardViewController: UIInputViewController {
         isCandidatePanelOpen = false
         candidatePanel.isHidden = true
         candidatePanel.setCandidates([])
-        keyboardStack.accessibilityElementsHidden = false
-        keyboardStack.isUserInteractionEnabled = true
+        updateKeyboardStackInteraction()
         candidateBar.setExpanded(false)
         UIAccessibility.post(
             notification: .screenChanged,

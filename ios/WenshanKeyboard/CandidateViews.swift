@@ -269,7 +269,8 @@ extension CandidateBar: UICollectionViewDataSource, UICollectionViewDelegateFlow
     ) -> CGSize {
         let text = candidates[indexPath.item] as NSString
         let width = text.size(withAttributes: [.font: font]).width + 22
-        return CGSize(width: max(44, ceil(width)), height: 36)
+        let height = max(30, min(36, collectionView.bounds.height - 4))
+        return CGSize(width: max(44, ceil(width)), height: height)
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
