@@ -108,6 +108,9 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	if raw >= 'A' && raw <= 'Z' && mods&nsModShift != 0 {
 		res := sess.ShiftLetter(raw)
 		if res.Consumed {
+			if res.Text != "" {
+				insertText(client, res.Text)
+			}
 			applyPreedit(client)
 			return true
 		}
