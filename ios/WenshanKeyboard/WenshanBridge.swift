@@ -93,10 +93,6 @@ enum WenshanBridge {
         map(MobileEscape())
     }
 
-    static func page(_ delta: Int) -> BridgeOutcome {
-        map(MobilePage(delta))
-    }
-
     static func select(_ index: Int) -> BridgeOutcome {
         syncContext()
         return map(MobileSelect(index))
@@ -105,6 +101,15 @@ enum WenshanBridge {
     static func selectChar(_ index: Int, last: Bool) -> BridgeOutcome {
         syncContext()
         return map(MobileSelectChar(index, last))
+    }
+
+    static func selectGlobal(_ index: Int) -> BridgeOutcome {
+        syncContext()
+        return map(MobileSelectGlobal(index))
+    }
+
+    static func allCandidates() -> [String] {
+        parseCandidates(MobileAllCandidates())
     }
 
     static func punctuate(_ ch: String) -> BridgeOutcome {

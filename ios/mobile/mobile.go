@@ -158,16 +158,19 @@ func closeLocked() {
 	mapped = false
 }
 
-func candidatesLocked() string {
-	if sess == nil {
-		return ""
-	}
-	cands := sess.Candidates()
+func candidatesText(cands []engine.Candidate) string {
 	texts := make([]string, len(cands))
 	for i, c := range cands {
 		texts[i] = c.Text
 	}
 	return strings.Join(texts, "\n")
+}
+
+func candidatesLocked() string {
+	if sess == nil {
+		return ""
+	}
+	return candidatesText(sess.Candidates())
 }
 
 func outcomeLocked(r input.Result) *Outcome {
@@ -299,6 +302,25 @@ func SelectChar(i int, last bool) *Outcome {
 	return outcomeLocked(sess.SelectChar(i, last))
 }
 
+// SelectGlobal 选出全部候选里的第 i 个，索引可以落在后续页。
+func SelectGlobal(i int) *Outcome {
+	mu.Lock()
+	defer mu.Unlock()
+	if sess == nil {
+		return nil
+	}
+	text, ok := sess.SelectGlobal(i)
+	if !ok {
+		return nil
+	}
+	return outcomeLocked(input.Result{
+		Text:      text,
+		Consumed:  true,
+		Mode:      sess.Mode(),
+		FullWidth: sess.FullWidth(),
+	})
+}
+
 // Punctuate 把 ASCII 标点转成中文标点；半角时 Consumed=false。
 func Punctuate(ch string) *Outcome {
 	mu.Lock()
@@ -373,6 +395,16 @@ func Candidates() string {
 	mu.Lock()
 	defer mu.Unlock()
 	return candidatesLocked()
+}
+
+// AllCandidates 返回全部候选文本，供键盘展开显示。
+func AllCandidates() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if sess == nil {
+		return ""
+	}
+	return candidatesText(sess.AllCandidates())
 }
 
 // Preedit 返回当前预编辑串（临时英文或拼音缓冲）。

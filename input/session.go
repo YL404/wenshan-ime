@@ -89,6 +89,22 @@ func (s *Session) Candidates() []engine.Candidate {
 	return s.eng.Candidates()
 }
 
+// AllCandidates 返回第 1 页和后续页的全部候选，供键盘展开显示。
+func (s *Session) AllCandidates() []engine.Candidate {
+	if s == nil || s.eng == nil {
+		return nil
+	}
+	return s.eng.AllCandidates()
+}
+
+// SelectGlobal 选出全部候选里的第 i 个，索引可以落在后续页。
+func (s *Session) SelectGlobal(i int) (string, bool) {
+	if s == nil || s.eng == nil {
+		return "", false
+	}
+	return s.eng.SelectGlobal(i)
+}
+
 func (s *Session) SaveFreq() error {
 	if s == nil || s.eng == nil {
 		return nil

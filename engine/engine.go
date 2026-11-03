@@ -231,6 +231,49 @@ func (e *Engine) Page(delta int) bool {
 	return true
 }
 
+// AllCandidates 返回第 1 页和后续页的全部候选，供键盘一次展开。
+// 它只补建后续页，不改变当前页。
+func (e *Engine) AllCandidates() []Candidate {
+	if len(e.first) == 0 {
+		return nil
+	}
+	if !e.deepReady {
+		e.buildDeep()
+		e.deepReady = true
+	}
+	out := make([]Candidate, 0, len(e.first)+len(e.deep))
+	out = append(out, e.first...)
+	out = append(out, e.deep...)
+	return out
+}
+
+// SelectGlobal 选出全部候选里的第 i 个。索引落在后续页时先把该页
+// 装进 e.cands，再走和 Select 相同的上屏路径。
+func (e *Engine) SelectGlobal(i int) (string, bool) {
+	if i < 0 || len(e.first) == 0 {
+		return "", false
+	}
+	if i < len(e.first) {
+		e.page = 0
+		e.cands = e.first
+		return e.Select(i)
+	}
+	if !e.deepReady {
+		e.buildDeep()
+		e.deepReady = true
+	}
+	j := i - len(e.first)
+	if j >= len(e.deep) {
+		return "", false
+	}
+	page := j/pageSize + 1
+	start := (page - 1) * pageSize
+	end := min(start+pageSize, len(e.deep))
+	e.page = page
+	e.cands = e.deep[start:end]
+	return e.Select(j - start)
+}
+
 // buildDeep 生成第 1 页之外的候选。第 1 页保持 refresh 的结果不变，
 // 这里只补后续页，并按文本去掉已经在第 1 页出现过的词。
 func (e *Engine) buildDeep() {

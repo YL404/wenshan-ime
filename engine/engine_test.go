@@ -184,6 +184,40 @@ func TestPagingLimit(t *testing.T) {
 	}
 }
 
+func TestAllCandidatesAndSelectGlobal(t *testing.T) {
+	entries := make([]Entry, 0, 25)
+	for i := 0; i < 25; i++ {
+		entries = append(entries, Entry{
+			Code:   "ni",
+			Text:   string(rune('a' + i)),
+			Weight: uint32(2500 - i),
+		})
+	}
+	e := New(buildDict(t, entries))
+	e.Type('n')
+	e.Type('i')
+
+	all := e.AllCandidates()
+	if len(all) != 25 {
+		t.Fatalf("全部候选 = %d，期望 25", len(all))
+	}
+	if all[0].Text != "a" || all[9].Text != "j" || all[24].Text != "y" {
+		t.Fatalf("全部候选顺序不对: %v", all)
+	}
+	// 展开全部候选不能改变当前页。
+	if got := e.Candidates(); len(got) != pageSize || got[0].Text != "a" {
+		t.Fatalf("AllCandidates 改变了当前页: %v", got)
+	}
+
+	text, ok := e.SelectGlobal(9)
+	if !ok || text != "j" {
+		t.Fatalf("SelectGlobal(9) = %q, %v", text, ok)
+	}
+	if len(e.Buffer()) != 0 || len(e.Candidates()) != 0 {
+		t.Fatal("跨页选词后没有清空")
+	}
+}
+
 func TestPagingSinglePage(t *testing.T) {
 	entries := make([]Entry, 0, pageSize)
 	for i := 0; i < pageSize; i++ {

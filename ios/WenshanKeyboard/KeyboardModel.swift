@@ -42,6 +42,7 @@ final class KeyboardModel {
     private(set) var candidates: [String] = []
     private(set) var mode: InputMode = .chinese
     private(set) var shift: ShiftState = .off
+    private(set) var fullWidth = true
     private(set) var returnKeyType: UIReturnKeyType = .default
 
     private var isLoading = false
@@ -90,6 +91,7 @@ final class KeyboardModel {
         } else {
             phase = .ready
             mode = WenshanBridge.mode() == 1 ? .english : .chinese
+            fullWidth = WenshanBridge.fullWidth()
         }
     }
 
@@ -179,21 +181,37 @@ final class KeyboardModel {
         return outcome.consumed ? apply(outcome) : .deleteBackward
     }
 
-    /// 翻页，delta 为 +1/-1。
-    func page(_ delta: Int) -> KeyboardOutcome {
-        guard phase == .ready else { return .idle }
-        let outcome = WenshanBridge.page(delta)
-        if outcome.consumed || !outcome.text.isEmpty {
-            return apply(outcome)
-        }
-        return .idle
-    }
-
-    /// 选中第 i 个候选并上屏。
+    /// 选中当前页第 i 个候选并上屏。
     func select(_ index: Int) -> KeyboardOutcome {
         guard phase == .ready else { return .idle }
         let outcome = WenshanBridge.select(index)
         return outcome.consumed ? apply(outcome) : .idle
+    }
+
+    /// 只取第 i 个候选的首字或尾字，编码消耗和选整词一样。
+    func selectChar(_ index: Int, last: Bool) -> KeyboardOutcome {
+        guard phase == .ready else { return .idle }
+        let outcome = WenshanBridge.selectChar(index, last: last)
+        return outcome.consumed ? apply(outcome) : .idle
+    }
+
+    /// 选中全部候选里的第 i 个，索引可以落在后续页。
+    func selectGlobal(_ index: Int) -> KeyboardOutcome {
+        guard phase == .ready else { return .idle }
+        let outcome = WenshanBridge.selectGlobal(index)
+        return outcome.consumed ? apply(outcome) : .idle
+    }
+
+    /// 展开候选时取当前组合的全部候选，不改当前页。
+    func allCandidates() -> [String] {
+        guard phase == .ready else { return [] }
+        return WenshanBridge.allCandidates()
+    }
+
+    /// 切换标点全角/半角。切换结果写在规则层，键盘只负责显示。
+    func toggleFullWidth() -> KeyboardOutcome {
+        guard phase == .ready else { return .handled }
+        return apply(WenshanBridge.toggleFullWidth())
     }
 
     /// 清空当前组合，不删除已经上屏的文本。
@@ -220,6 +238,7 @@ final class KeyboardModel {
         preedit = outcome.preedit
         candidates = outcome.candidates
         mode = outcome.mode == 1 ? .english : .chinese
+        fullWidth = outcome.fullWidth
         return outcome.text.isEmpty ? .handled : .commit(outcome.text)
     }
 }

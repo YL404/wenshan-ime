@@ -6,7 +6,10 @@ private let keyboardLog = Logger(subsystem: "im.wenshan.ios.keyboard", category:
 /// 键盘扩展入口：只做布局、渲染和按键转发，输入语义在 KeyboardModel。
 final class KeyboardViewController: UIInputViewController {
     private let model = KeyboardModel()
+    private let toolbarBar = ToolbarBar()
     private let candidateBar = CandidateBar()
+    private let candidatePanel = CandidatePanel()
+    private let topBar = UIView()
     private let keyboardStack = UIStackView()
     private let root = UIStackView()
     private let keyPreview = KeyPreviewView()
@@ -14,7 +17,7 @@ final class KeyboardViewController: UIInputViewController {
     private let keyFeedback = UIImpactFeedbackGenerator(style: .light)
     private let selectionFeedback = UISelectionFeedbackGenerator()
     private var heightConstraint: NSLayoutConstraint!
-    private var candidateHeightConstraint: NSLayoutConstraint!
+    private var topBarHeightConstraint: NSLayoutConstraint!
     private var metrics = KeyboardMetrics.make(screen: .zero, width: 0, isPad: false, isFloating: false)
 
     private var shiftButton: KeyButton?
@@ -25,6 +28,7 @@ final class KeyboardViewController: UIInputViewController {
     private var symbolsOn = false
     private var hasMarkedText = false
     private var isApplyingText = false
+    private var isCandidatePanelOpen = false
 
     private let letterRows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
     private let symbolRows = ["1234567890", "-/:;()¥&@\"", "。？！，、；：…"]
@@ -65,7 +69,8 @@ final class KeyboardViewController: UIInputViewController {
         model.reset()
         clearMarkedText()
         hidePreview()
-        candidateBar.setCandidates([], status: nil)
+        closeCandidatePanel()
+        candidateBar.setCandidates([])
     }
     /// 外部改正文：只在组合态重置，避免每次选词都误清状态。
     override func textDidChange(_ textInput: UITextInput?) {
@@ -112,22 +117,67 @@ final class KeyboardViewController: UIInputViewController {
         heightConstraint.priority = .defaultHigh
         heightConstraint.isActive = true
 
+        topBar.translatesAutoresizingMaskIntoConstraints = false
+        topBarHeightConstraint = topBar.heightAnchor.constraint(equalToConstant: metrics.candidateHeight)
+        topBarHeightConstraint.isActive = true
+
+        toolbarBar.translatesAutoresizingMaskIntoConstraints = false
         candidateBar.translatesAutoresizingMaskIntoConstraints = false
-        candidateHeightConstraint = candidateBar.heightAnchor.constraint(equalToConstant: metrics.candidateHeight)
-        candidateHeightConstraint.isActive = true
+        topBar.addSubview(toolbarBar)
+        topBar.addSubview(candidateBar)
+        NSLayoutConstraint.activate([
+            toolbarBar.leadingAnchor.constraint(equalTo: topBar.leadingAnchor),
+            toolbarBar.trailingAnchor.constraint(equalTo: topBar.trailingAnchor),
+            toolbarBar.topAnchor.constraint(equalTo: topBar.topAnchor),
+            toolbarBar.bottomAnchor.constraint(equalTo: topBar.bottomAnchor),
+            candidateBar.leadingAnchor.constraint(equalTo: topBar.leadingAnchor),
+            candidateBar.trailingAnchor.constraint(equalTo: topBar.trailingAnchor),
+            candidateBar.topAnchor.constraint(equalTo: topBar.topAnchor),
+            candidateBar.bottomAnchor.constraint(equalTo: topBar.bottomAnchor),
+        ])
+        candidateBar.isHidden = true
+
         candidateBar.setCandidateFont(.systemFont(ofSize: metrics.candidateFontSize))
         candidateBar.onSelect = { [weak self] index in
             guard let self else { return }
+            self.closeCandidatePanel()
             self.playSelectionFeedback()
             self.apply(self.model.select(index))
         }
-        candidateBar.onPage = { [weak self] delta in
+        candidateBar.onSelectChar = { [weak self] index, last in
             guard let self else { return }
+            self.closeCandidatePanel()
             self.playSelectionFeedback()
-            self.apply(self.model.page(delta))
+            self.apply(self.model.selectChar(index, last: last))
+        }
+        candidateBar.onExpand = { [weak self] in
+            self?.toggleCandidatePanel()
         }
         candidateBar.onDismiss = { [weak self] in
-            self?.dismissKeyboard()
+            guard let self else { return }
+            self.closeCandidatePanel()
+            self.dismissKeyboard()
+        }
+        toolbarBar.onToggleFullWidth = { [weak self] in
+            guard let self else { return }
+            self.apply(self.model.toggleFullWidth())
+        }
+        toolbarBar.onDismiss = { [weak self] in
+            guard let self else { return }
+            self.closeCandidatePanel()
+            self.dismissKeyboard()
+        }
+        toolbarBar.setStatus("加载中…")
+        toolbarBar.setFullWidth(model.fullWidth)
+        toolbarBar.setFullWidthEnabled(false)
+        candidateBar.setCandidates([])
+
+        candidatePanel.isHidden = true
+        candidatePanel.onSelect = { [weak self] index in
+            guard let self else { return }
+            self.closeCandidatePanel()
+            self.playSelectionFeedback()
+            self.apply(self.model.selectGlobal(index))
         }
 
         keyboardStack.axis = .vertical
@@ -140,9 +190,10 @@ final class KeyboardViewController: UIInputViewController {
         root.spacing = metrics.gap
         root.alignment = .fill
         root.translatesAutoresizingMaskIntoConstraints = false
-        root.addArrangedSubview(candidateBar)
+        root.addArrangedSubview(topBar)
         root.addArrangedSubview(keyboardStack)
         view.addSubview(root)
+        view.addSubview(candidatePanel)
         view.addSubview(keyPreview)
 
         NSLayoutConstraint.activate([
@@ -150,6 +201,11 @@ final class KeyboardViewController: UIInputViewController {
             root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -6),
             root.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
             root.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
+
+            candidatePanel.leadingAnchor.constraint(equalTo: keyboardStack.leadingAnchor),
+            candidatePanel.trailingAnchor.constraint(equalTo: keyboardStack.trailingAnchor),
+            candidatePanel.topAnchor.constraint(equalTo: keyboardStack.topAnchor),
+            candidatePanel.bottomAnchor.constraint(equalTo: keyboardStack.bottomAnchor),
         ])
 
         renderKeyboardRows()
@@ -178,7 +234,7 @@ final class KeyboardViewController: UIInputViewController {
         else { return }
         metrics = next
         heightConstraint.constant = next.totalHeight
-        candidateHeightConstraint.constant = next.candidateHeight
+        topBarHeightConstraint.constant = next.candidateHeight
         root.spacing = next.gap
         keyboardStack.spacing = next.gap
         candidateBar.setCandidateFont(.systemFont(ofSize: next.candidateFontSize))
@@ -642,21 +698,34 @@ final class KeyboardViewController: UIInputViewController {
 
     private func render() {
         updateMarkedText()
+        updateTopBar()
         updateCandidateBar()
         updateKeys()
     }
 
-    private func updateCandidateBar() {
-        let status: String?
+    private func updateTopBar() {
+        let composing = model.isComposing
+        toolbarBar.isHidden = composing
+        candidateBar.isHidden = !composing
+
         switch model.phase {
         case .loading:
-            status = "加载中…"
+            toolbarBar.setStatus("加载中…")
         case .failed(let reason):
-            status = "词表加载失败：\(reason)"
+            toolbarBar.setStatus("词表加载失败", isError: true, hint: reason)
         case .ready:
-            status = model.mode == .chinese ? "文山" : "English"
+            toolbarBar.setStatus(model.mode == .chinese ? "中文" : "English")
         }
-        candidateBar.setCandidates(model.candidates, status: status)
+        toolbarBar.setFullWidth(model.fullWidth)
+        toolbarBar.setFullWidthEnabled(model.phase == .ready)
+
+        if !composing {
+            closeCandidatePanel()
+        }
+    }
+
+    private func updateCandidateBar() {
+        candidateBar.setCandidates(model.candidates)
     }
 
     private func updateMarkedText() {
@@ -693,9 +762,40 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func toggleSymbols() {
+        closeCandidatePanel()
         symbolsOn.toggle()
         renderKeyboardRows()
         render()
+    }
+
+    private func toggleCandidatePanel() {
+        if isCandidatePanelOpen {
+            closeCandidatePanel()
+            return
+        }
+        guard model.isComposing else { return }
+        let all = model.allCandidates()
+        guard !all.isEmpty else { return }
+        candidatePanel.setCandidates(all)
+        candidatePanel.isHidden = false
+        keyboardStack.accessibilityElementsHidden = true
+        keyboardStack.isUserInteractionEnabled = false
+        isCandidatePanelOpen = true
+        candidateBar.setExpanded(true)
+        UIAccessibility.post(notification: .screenChanged, argument: candidatePanel)
+    }
+
+    private func closeCandidatePanel() {
+        guard isCandidatePanelOpen else { return }
+        isCandidatePanelOpen = false
+        candidatePanel.isHidden = true
+        candidatePanel.setCandidates([])
+        keyboardStack.accessibilityElementsHidden = false
+        keyboardStack.isUserInteractionEnabled = true
+        candidateBar.setExpanded(false)
+        UIAccessibility.post(
+            notification: .screenChanged,
+            argument: candidateBar.isHidden ? toolbarBar : candidateBar)
     }
 
     private func apply(_ outcome: KeyboardOutcome, renderNow: Bool = true) {
