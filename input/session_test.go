@@ -245,3 +245,117 @@ func TestFinish(t *testing.T) {
 		t.Fatal("结束输入后状态没清干净")
 	}
 }
+
+// 退格删掉刚上屏的英文后，再打英文仍要按前一个字符补空格。
+func TestSpacingAfterDelete(t *testing.T) {
+	s := New(engine.New(testDict(t)))
+	s.Type('n')
+	s.Type('i')
+	if r := s.Space(); r.Text != "你" {
+		t.Fatalf("首选 = %q", r.Text)
+	}
+	s.Type('a')
+	s.Type('b')
+	s.Type('c')
+	if r := s.Space(); r.Text != " abc" {
+		t.Fatalf("英文上屏 = %q", r.Text)
+	}
+	// 四格退格删掉 " abc"，前一个字符回到「你」。
+	for i := 0; i < 4; i++ {
+		if r := s.Backspace(); r.Consumed {
+			t.Fatalf("第 %d 格退格不该被消费", i)
+		}
+	}
+	s.Type('a')
+	s.Type('b')
+	s.Type('c')
+	if r := s.Space(); r.Text != " abc" {
+		t.Fatalf("删掉英文后重打 = %q", r.Text)
+	}
+	// 只删三个字母时原来的空格还在，不能再补一个。
+	for i := 0; i < 3; i++ {
+		s.Backspace()
+	}
+	s.Type('a')
+	s.Type('b')
+	s.Type('c')
+	if r := s.Space(); r.Text != "abc" {
+		t.Fatalf("删掉字母后重打 = %q", r.Text)
+	}
+}
+
+// 删掉平台插入的空格、删掉中文标点后，都算回到中文，后面接英文要补空格。
+func TestBackspaceRestoresCJK(t *testing.T) {
+	s := New(engine.New(testDict(t)))
+	s.Type('n')
+	s.Type('i')
+	s.Space()
+	if r := s.Space(); r.Consumed {
+		t.Fatal("没有组合时空格应交给平台")
+	}
+	s.Backspace()
+	if r := s.Passthrough('a'); r.Text != " " {
+		t.Fatalf("删掉空格后打英文 = %q", r.Text)
+	}
+
+	s = New(engine.New(testDict(t)))
+	s.Type('n')
+	s.Type('i')
+	s.Space()
+	if r := s.Punctuate(','); r.Text != "，" {
+		t.Fatalf("逗号 = %q", r.Text)
+	}
+	s.Backspace()
+	if r := s.Passthrough('a'); r.Text != " " {
+		t.Fatalf("删掉逗号后打英文 = %q", r.Text)
+	}
+}
+
+// 退格回到数字时，句号仍按小数处理。
+func TestBackspaceRestoresDigit(t *testing.T) {
+	s := New(engine.New(nil))
+	s.Direct("12")
+	s.Backspace()
+	if r := s.Punctuate('.'); r.Text != "." {
+		t.Fatalf("数字后退格再打句号 = %q", r.Text)
+	}
+
+	s = New(engine.New(nil))
+	s.Direct("a1")
+	s.Backspace()
+	if r := s.Punctuate('.'); r.Text != "。" {
+		t.Fatalf("字母后退格再打句号 = %q", r.Text)
+	}
+}
+
+// 英文直通模式下的退格同样要回退记录。
+func TestEnglishBackspace(t *testing.T) {
+	s := New(engine.New(testDict(t)))
+	s.Type('n')
+	s.Type('i')
+	s.Space()
+	s.ToggleMode()
+	for _, ch := range []byte{'a', 'b', 'c'} {
+		s.Passthrough(ch)
+	}
+	for i := 0; i < 4; i++ {
+		if r := s.Backspace(); r.Consumed {
+			t.Fatalf("第 %d 格退格不该被消费", i)
+		}
+	}
+	if r := s.Passthrough('a'); r.Text != " " {
+		t.Fatalf("英文模式删掉英文后重打 = %q", r.Text)
+	}
+}
+
+// 光标可能挪走的地方要作废记录，不能再按旧字符补空格。
+func TestUntrack(t *testing.T) {
+	s := New(engine.New(testDict(t)))
+	s.Type('n')
+	s.Type('i')
+	s.Space()
+	s.Untrack()
+	if r := s.Passthrough('a'); r.Text != "" {
+		t.Fatalf("作废记录后打英文 = %q", r.Text)
+	}
+}

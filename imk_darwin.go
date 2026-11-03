@@ -90,18 +90,25 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	if ch >= 'A' && ch <= 'Z' {
 		ch += 'a' - 'A'
 	}
+	keyCode := objc.Send[uintptr](event, selKeyCode)
+	// 带 Command/Control/Option 的组合键一律放行，交给应用自己处理；
+	// 粘贴、撤销、全选都可能改掉正文和光标位置，记录到这里作废。
+	if mods&(nsModCommand|nsModControl|nsModOption) != 0 {
+		sess.Untrack()
+		return false
+	}
 	// 英文直通模式：状态仍由规则层维护，但按键交给应用。
 	if sess.Mode() == input.English {
+		if keyCode == keyCodeDelete {
+			// 退格由应用删掉一格，规则层跟着退一格。
+			sess.Backspace()
+			return false
+		}
 		if res := sess.Passthrough(ch); res.Text != "" {
 			insertText(client, res.Text)
 		}
 		return false
 	}
-	// 带 Command/Control/Option 的组合键一律放行，交给应用自己处理。
-	if mods&(nsModCommand|nsModControl|nsModOption) != 0 {
-		return false
-	}
-	keyCode := objc.Send[uintptr](event, selKeyCode)
 
 	// 中文态按住 Shift 打大写字母：没有缓冲时直接上屏；
 	// 正在打拼音时把已打的编码接进临时英文串，再从这字母继续。
@@ -183,6 +190,8 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 			applyPreedit(client)
 			return true
 		}
+		// Tab 交给应用换焦点，正文没插入空格，记录也跟着作废。
+		sess.Untrack()
 		return false
 	case keyCodePageUp:
 		res := sess.Page(-1)
