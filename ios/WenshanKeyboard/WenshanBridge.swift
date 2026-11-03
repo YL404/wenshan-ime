@@ -22,6 +22,15 @@ struct BridgeOutcome: Equatable {
 /// gomobile 桥的 Swift 门面。所有引擎和规则调用都从主线程进来；
 /// 词表 mmap 由 Go 侧加锁，后台线程读词表也安全。
 enum WenshanBridge {
+    /// 光标前正文的来源，由键盘 VC 挂上。规则层判断要不要补空格时读它。
+    /// 除了后台的 open，桥调用都在主线程，这里不受 actor 隔离约束。
+    nonisolated(unsafe) static var contextBefore: (() -> String)?
+
+    /// 把最新正文推给规则层。只有可能上屏或补空格的按键需要。
+    private static func syncContext() {
+        MobileSetContextBefore(contextBefore?() ?? "")
+    }
+
     /// 打开词表并建立引擎。优先用主 App 部署到 App Group 的词表；
     /// 没部署或打不开时退回扩展 Bundle 里的同一份文件。
     /// 失败时返回错误原因，成功返回 nil。
@@ -57,19 +66,23 @@ enum WenshanBridge {
     }
 
     static func type(_ keys: String) -> BridgeOutcome {
-        map(MobileType(keys))
+        syncContext()
+        return map(MobileType(keys))
     }
 
     static func shiftLetter(_ key: String) -> BridgeOutcome {
-        map(MobileShiftLetter(key))
+        syncContext()
+        return map(MobileShiftLetter(key))
     }
 
     static func space() -> BridgeOutcome {
-        map(MobileSpace())
+        syncContext()
+        return map(MobileSpace())
     }
 
     static func returnKey() -> BridgeOutcome {
-        map(MobileReturn())
+        syncContext()
+        return map(MobileReturn())
     }
 
     static func backspace() -> BridgeOutcome {
@@ -85,27 +98,33 @@ enum WenshanBridge {
     }
 
     static func select(_ index: Int) -> BridgeOutcome {
-        map(MobileSelect(index))
+        syncContext()
+        return map(MobileSelect(index))
     }
 
     static func selectChar(_ index: Int, last: Bool) -> BridgeOutcome {
-        map(MobileSelectChar(index, last))
+        syncContext()
+        return map(MobileSelectChar(index, last))
     }
 
     static func punctuate(_ ch: String) -> BridgeOutcome {
-        map(MobilePunctuate(ch))
+        syncContext()
+        return map(MobilePunctuate(ch))
     }
 
     static func direct(_ text: String) -> BridgeOutcome {
-        map(MobileDirect(text))
+        syncContext()
+        return map(MobileDirect(text))
     }
 
     static func passthrough(_ ch: String) -> BridgeOutcome {
-        map(MobilePassthrough(ch))
+        syncContext()
+        return map(MobilePassthrough(ch))
     }
 
     static func toggleMode() -> BridgeOutcome {
-        map(MobileToggleMode())
+        syncContext()
+        return map(MobileToggleMode())
     }
 
     static func toggleFullWidth() -> BridgeOutcome {

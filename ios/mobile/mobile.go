@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"unicode/utf8"
 
 	"wenshan/engine"
 	"wenshan/input"
@@ -24,6 +25,9 @@ var (
 	dictMap []byte
 	mapped  bool
 	lastErr string
+
+	// 光标前的正文，Swift 每次按键前推进来。补空格的判断要用它。
+	contextBefore string
 )
 
 // Outcome 是一次规则动作的结果。Text 已经包含自动补的空格；
@@ -81,13 +85,34 @@ func Open(dictPath, dataDir string) bool {
 	}
 	dictMap = data
 	eng := engine.New(d)
-	sess = input.New(eng)
+	s := input.New(eng)
+	// 补空格要读光标前一个字符；组合中正文末尾是预编辑串本身，先去掉。
+	s.SetLookbehind(func() (rune, bool) {
+		text := contextBefore
+		if pre := s.Preedit(); pre != "" && strings.HasSuffix(text, pre) {
+			text = text[:len(text)-len(pre)]
+		}
+		if text == "" {
+			return 0, false
+		}
+		r, _ := utf8.DecodeLastRuneInString(text)
+		return r, true
+	})
+	sess = s
 	if dataDir != "" {
 		eng.SetFreq(engine.LoadFreq(filepath.Join(dataDir, "freq.tsv")))
 		eng.SetUserDict(engine.LoadUserDict(filepath.Join(dataDir, "userdict.tsv")))
 		eng.SetPhrases(engine.LoadUserDict(filepath.Join(dataDir, "phrases.tsv")))
 	}
 	return true
+}
+
+// SetContextBefore 更新光标前的正文。Swift 在每次按键前调用；
+// 规则层判断要不要补空格时读它，读不到就当前面没有字符。
+func SetContextBefore(text string) {
+	mu.Lock()
+	defer mu.Unlock()
+	contextBefore = text
 }
 
 // LastError 返回 Open 或引擎操作最近一次失败的原因。

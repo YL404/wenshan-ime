@@ -23,6 +23,30 @@ func testDict(t *testing.T) *engine.Dict {
 	return d
 }
 
+// doc 模拟宿主正文：规则层通过 lookbehind 读它最后一格，测试里自己维护。
+type doc []rune
+
+func (d *doc) before() (rune, bool) {
+	if len(*d) == 0 {
+		return 0, false
+	}
+	return (*d)[len(*d)-1], true
+}
+
+func (d *doc) insert(text string) { *d = append(*d, []rune(text)...) }
+
+func (d *doc) delete(n int) { *d = (*d)[:len(*d)-n] }
+
+// withDoc 建一个「光标停在 text 末尾」的会话，返回的 doc 由测试自己维护。
+func withDoc(t *testing.T, text string) (*Session, *doc) {
+	t.Helper()
+	d := new(doc)
+	d.insert(text)
+	s := New(engine.New(testDict(t)))
+	s.SetLookbehind(d.before)
+	return s, d
+}
+
 func TestPunctuate(t *testing.T) {
 	s := New(nil)
 	if r := s.Punctuate(','); !r.Consumed || r.Text != "，" {
@@ -47,24 +71,17 @@ func TestPunctuate(t *testing.T) {
 }
 
 func TestNumberPunct(t *testing.T) {
-	s := New(nil)
-	s.prevDigit = true
+	s, _ := withDoc(t, "1")
 	if r := s.Punctuate('.'); r.Text != "." {
 		t.Fatalf("数字后的句号 = %q", r.Text)
 	}
-	s = New(nil)
+	s, _ = withDoc(t, "我")
 	if r := s.Punctuate('.'); r.Text != "。" {
 		t.Fatalf("非数字后的句号 = %q", r.Text)
 	}
-	s = New(nil)
-	s.prevDigit = true
+	s, _ = withDoc(t, "1")
 	if r := s.Punctuate(','); r.Text != "，" {
 		t.Fatalf("逗号不受数字影响 = %q", r.Text)
-	}
-	s = New(nil)
-	s.Direct("3")
-	if r := s.Punctuate('.'); r.Text != "." {
-		t.Fatalf("直通数字后的句号 = %q", r.Text)
 	}
 }
 
@@ -77,38 +94,36 @@ func TestFullWidthOff(t *testing.T) {
 }
 
 func TestSpacing(t *testing.T) {
-	s := New(nil)
-	s.prevClass = classCJK
-	if r := s.Passthrough('a'); r.Text != " " || s.prevClass != classASCII {
-		t.Fatalf("中文后接英文 = %q, class=%v", r.Text, s.prevClass)
+	s, _ := withDoc(t, "我")
+	if r := s.Passthrough('a'); r.Text != " " {
+		t.Fatalf("中文后接英文 = %q", r.Text)
 	}
-	s.prevClass = classCJK
-	if r := s.Passthrough('.'); r.Text != "" || s.prevClass != classNone {
-		t.Fatalf("中文后接标点 = %q, class=%v", r.Text, s.prevClass)
+	s, _ = withDoc(t, "我")
+	if r := s.Passthrough('.'); r.Text != "" {
+		t.Fatalf("中文后接标点 = %q", r.Text)
 	}
 	if classOf("我") != classCJK || classOf("abc") != classASCII ||
 		classOf("API") != classASCII || classOf("，") != classNone || classOf("") != classNone {
 		t.Fatal("classOf 分类不对")
 	}
-	// 透传的数字和字母要记成 ASCII，后面的中文才会自动补空格；
-	// 透传的标点不补。
-	s.prevClass = classNone
-	s.Passthrough('3')
-	if s.prevClass != classASCII || !s.prevDigit {
-		t.Fatal("透传数字后应记成 ASCII 数字")
+	// 问不到正文时不补空格，也不该崩。
+	if r := New(nil).Passthrough('a'); r.Text != "" {
+		t.Fatalf("没有 lookbehind 时补了空格 = %q", r.Text)
 	}
 }
 
 func TestSelectAndSpace(t *testing.T) {
-	s := New(engine.New(testDict(t)))
+	s, d := withDoc(t, "")
 	s.Type('n')
 	s.Type('i')
-	if r := s.Space(); r.Text != "你" || !r.Consumed {
+	r := s.Space()
+	if r.Text != "你" || !r.Consumed {
 		t.Fatalf("空格选首选 = %q, %v", r.Text, r.Consumed)
 	}
 	if s.Buffer() != "" {
 		t.Fatalf("选词后缓冲 = %q", s.Buffer())
 	}
+	d.insert(r.Text)
 	if r := s.Passthrough('a'); r.Text != " " {
 		t.Fatalf("中文后接英文补空格 = %q", r.Text)
 	}
@@ -159,9 +174,6 @@ func TestReturnInline(t *testing.T) {
 	if r := s.Return(); r.Text != "niA" || !r.Consumed {
 		t.Fatalf("回车结束临时英文 = %q, %v", r.Text, r.Consumed)
 	}
-	if s.prevClass != classNone {
-		t.Fatalf("回车后类别 = %v", s.prevClass)
-	}
 }
 
 func TestPageCommitsInline(t *testing.T) {
@@ -187,13 +199,9 @@ func TestPassthroughCommitsPending(t *testing.T) {
 }
 
 func TestShiftLetterNoBuffer(t *testing.T) {
-	s := New(engine.New(nil))
-	s.prevClass = classCJK
+	s, _ := withDoc(t, "我")
 	if r := s.ShiftLetter('A'); r.Text != " A" {
 		t.Fatalf("中文后直接打大写 = %q", r.Text)
-	}
-	if s.prevClass != classASCII {
-		t.Fatalf("大写后类别 = %v", s.prevClass)
 	}
 }
 
@@ -246,116 +254,74 @@ func TestFinish(t *testing.T) {
 	}
 }
 
-// 退格删掉刚上屏的英文后，再打英文仍要按前一个字符补空格。
+// 删掉刚上屏的英文（连前面的空格）后重打，正文前一个字符回到中文，仍要补空格。
 func TestSpacingAfterDelete(t *testing.T) {
-	s := New(engine.New(testDict(t)))
-	s.Type('n')
-	s.Type('i')
-	if r := s.Space(); r.Text != "你" {
-		t.Fatalf("首选 = %q", r.Text)
-	}
-	s.Type('a')
-	s.Type('b')
-	s.Type('c')
-	if r := s.Space(); r.Text != " abc" {
-		t.Fatalf("英文上屏 = %q", r.Text)
-	}
-	// 四格退格删掉 " abc"，前一个字符回到「你」。
-	for i := 0; i < 4; i++ {
-		if r := s.Backspace(); r.Consumed {
-			t.Fatalf("第 %d 格退格不该被消费", i)
-		}
-	}
-	s.Type('a')
-	s.Type('b')
-	s.Type('c')
-	if r := s.Space(); r.Text != " abc" {
+	s, d := withDoc(t, "你")
+	d.insert(" abc")
+	d.delete(4)
+	if r := s.Passthrough('a'); r.Text != " " {
 		t.Fatalf("删掉英文后重打 = %q", r.Text)
 	}
-	// 只删三个字母时原来的空格还在，不能再补一个。
-	for i := 0; i < 3; i++ {
-		s.Backspace()
-	}
-	s.Type('a')
-	s.Type('b')
-	s.Type('c')
-	if r := s.Space(); r.Text != "abc" {
+	// 只删字母时前面的空格还在，不能再补一个。
+	d.insert(" abc")
+	d.delete(3)
+	if r := s.Passthrough('a'); r.Text != "" {
 		t.Fatalf("删掉字母后重打 = %q", r.Text)
 	}
 }
 
-// 删掉平台插入的空格、删掉中文标点后，都算回到中文，后面接英文要补空格。
-func TestBackspaceRestoresCJK(t *testing.T) {
-	s := New(engine.New(testDict(t)))
+// 删掉平台插入的空格后，前面是中文，打英文要补空格。
+func TestSpaceThenEnglish(t *testing.T) {
+	s, d := withDoc(t, "")
 	s.Type('n')
 	s.Type('i')
+	d.insert(s.Space().Text)
 	s.Space()
-	if r := s.Space(); r.Consumed {
-		t.Fatal("没有组合时空格应交给平台")
-	}
-	s.Backspace()
+	d.insert(" ")
+	d.delete(1)
 	if r := s.Passthrough('a'); r.Text != " " {
 		t.Fatalf("删掉空格后打英文 = %q", r.Text)
 	}
+}
 
-	s = New(engine.New(testDict(t)))
+// 英文后接中文，中文前面要补空格。
+func TestChineseAfterEnglish(t *testing.T) {
+	s, _ := withDoc(t, "abc")
 	s.Type('n')
 	s.Type('i')
-	s.Space()
-	if r := s.Punctuate(','); r.Text != "，" {
-		t.Fatalf("逗号 = %q", r.Text)
-	}
-	s.Backspace()
-	if r := s.Passthrough('a'); r.Text != " " {
-		t.Fatalf("删掉逗号后打英文 = %q", r.Text)
+	if r := s.Space(); r.Text != " 你" {
+		t.Fatalf("英文后接中文 = %q", r.Text)
 	}
 }
 
-// 退格回到数字时，句号仍按小数处理。
-func TestBackspaceRestoresDigit(t *testing.T) {
-	s := New(engine.New(nil))
-	s.Direct("12")
-	s.Backspace()
+// 英文直通模式同样按正文补空格。
+func TestEnglishModeSpacing(t *testing.T) {
+	s, _ := withDoc(t, "你")
+	s.ToggleMode()
+	if r := s.Passthrough('a'); r.Text != " " {
+		t.Fatalf("英文模式中文后接英文 = %q", r.Text)
+	}
+}
+
+// 光标前是数字时句号保持半角，退格之后也一样。
+func TestDigitAfterDelete(t *testing.T) {
+	s, d := withDoc(t, "12")
+	d.delete(1)
 	if r := s.Punctuate('.'); r.Text != "." {
 		t.Fatalf("数字后退格再打句号 = %q", r.Text)
 	}
-
-	s = New(engine.New(nil))
-	s.Direct("a1")
-	s.Backspace()
+	s, d = withDoc(t, "a1")
+	d.delete(1)
 	if r := s.Punctuate('.'); r.Text != "。" {
 		t.Fatalf("字母后退格再打句号 = %q", r.Text)
 	}
 }
 
-// 英文直通模式下的退格同样要回退记录。
-func TestEnglishBackspace(t *testing.T) {
+// 查不到正文时按「前面没有字符」处理，不补空格。
+func TestLookbehindFails(t *testing.T) {
 	s := New(engine.New(testDict(t)))
-	s.Type('n')
-	s.Type('i')
-	s.Space()
-	s.ToggleMode()
-	for _, ch := range []byte{'a', 'b', 'c'} {
-		s.Passthrough(ch)
-	}
-	for i := 0; i < 4; i++ {
-		if r := s.Backspace(); r.Consumed {
-			t.Fatalf("第 %d 格退格不该被消费", i)
-		}
-	}
-	if r := s.Passthrough('a'); r.Text != " " {
-		t.Fatalf("英文模式删掉英文后重打 = %q", r.Text)
-	}
-}
-
-// 光标可能挪走的地方要作废记录，不能再按旧字符补空格。
-func TestUntrack(t *testing.T) {
-	s := New(engine.New(testDict(t)))
-	s.Type('n')
-	s.Type('i')
-	s.Space()
-	s.Untrack()
+	s.SetLookbehind(func() (rune, bool) { return 0, false })
 	if r := s.Passthrough('a'); r.Text != "" {
-		t.Fatalf("作废记录后打英文 = %q", r.Text)
+		t.Fatalf("查不到正文时补了空格 = %q", r.Text)
 	}
 }

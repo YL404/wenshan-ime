@@ -1,6 +1,7 @@
 package main
 
 import (
+	"unicode/utf16"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -92,18 +93,12 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	}
 	keyCode := objc.Send[uintptr](event, selKeyCode)
 	// 带 Command/Control/Option 的组合键一律放行，交给应用自己处理；
-	// 粘贴、撤销、全选都可能改掉正文和光标位置，记录到这里作废。
+	// 快捷键上不该按光标前的字符补空格。
 	if mods&(nsModCommand|nsModControl|nsModOption) != 0 {
-		sess.Untrack()
 		return false
 	}
-	// 英文直通模式：状态仍由规则层维护，但按键交给应用。
+	// 英文直通模式：按键交给应用，补空格仍由规则层判断。
 	if sess.Mode() == input.English {
-		if keyCode == keyCodeDelete {
-			// 退格由应用删掉一格，规则层跟着退一格。
-			sess.Backspace()
-			return false
-		}
 		if res := sess.Passthrough(ch); res.Text != "" {
 			insertText(client, res.Text)
 		}
@@ -190,8 +185,6 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 			applyPreedit(client)
 			return true
 		}
-		// Tab 交给应用换焦点，正文没插入空格，记录也跟着作废。
-		sess.Untrack()
 		return false
 	case keyCodePageUp:
 		res := sess.Page(-1)
@@ -412,6 +405,57 @@ func clearMarked(client objc.ID) {
 // 输入法是常驻进程，一个异常就没了。
 func clientCan(client objc.ID, sel objc.SEL) bool {
 	return client != 0 && send(client, selRespondsToSelector, sel) != 0
+}
+
+// charBefore 取光标前一个字符，用来判断中英文之间要不要补空格。
+// 不是所有 IMK 客户端都实现或都肯给正文（有的只给当前行，有的直接给 nil），
+// 取不到就返回 false，规则层按「前面没有字符」处理。
+func charBefore(client objc.ID) (rune, bool) {
+	if !clientCan(client, selAttributedSubstring) || !clientCan(client, selSelectedRange) {
+		return 0, false
+	}
+	loc := objc.Send[NSRange](client, selSelectedRange).Location
+	// 组合中光标停在预编辑串末尾，要越过它看正文，否则读到的是自己打的字母。
+	if clientCan(client, selMarkedRange) {
+		if marked := objc.Send[NSRange](client, selMarkedRange); marked.Length > 0 && marked.Location != nsNotFound {
+			loc = marked.Location
+		}
+	}
+	if loc == 0 || loc == nsNotFound {
+		return 0, false
+	}
+	u, ok := unitAt(client, loc-1)
+	if !ok {
+		return 0, false
+	}
+	// 低代理说明光标前是一个代理对，往前再取一格凑成整字。
+	if u >= 0xdc00 && u <= 0xdfff {
+		if loc < 2 {
+			return 0, false
+		}
+		hi, ok := unitAt(client, loc-2)
+		if !ok || hi < 0xd800 || hi > 0xdbff {
+			return 0, false
+		}
+		return utf16.DecodeRune(rune(hi), rune(u)), true
+	}
+	if u >= 0xd800 && u <= 0xdfff {
+		return 0, false
+	}
+	return rune(u), true
+}
+
+// unitAt 取正文里第 i 个 UTF-16 单元。
+func unitAt(client objc.ID, i uintptr) (uint16, bool) {
+	attr := send(client, selAttributedSubstring, i, 1)
+	if attr == 0 {
+		return 0, false
+	}
+	str := send(attr, selString)
+	if str == 0 || objc.Send[uintptr](str, selLength) == 0 {
+		return 0, false
+	}
+	return objc.Send[uint16](str, selCharacterAtIndex, uintptr(0)), true
 }
 
 // showCandidates 先把候选窗放好，再让应用去排版预编辑串：候选窗的延迟因此

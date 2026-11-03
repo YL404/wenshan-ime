@@ -28,6 +28,14 @@ var (
 	selModifierFlags = objc.RegisterName("modifierFlags")
 	selKeyCode       = objc.RegisterName("keyCode")
 	selEventType     = objc.RegisterName("type")
+
+	// 读光标前一个字符用的几个方法，都是 IMKTextInput 的标准接口。
+	selSelectedRange       = objc.RegisterName("selectedRange")
+	selMarkedRange         = objc.RegisterName("markedRange")
+	selAttributedSubstring = objc.RegisterName("attributedSubstringFromRange:")
+	selString              = objc.RegisterName("string")
+	selLength              = objc.RegisterName("length")
+	selCharacterAtIndex    = objc.RegisterName("characterAtIndex:")
 )
 
 // nsNotFound 是 Foundation 的 NSNotFound（NSIntegerMax），表示「没有替换范围」。
@@ -50,6 +58,13 @@ type NSPoint struct {
 type NSRect struct {
 	_          structs.HostLayout
 	X, Y, W, H float64
+}
+
+// NSRange 是 Foundation 的 {location, length}，arm64 上 16 字节走寄存器返回。
+type NSRange struct {
+	_        structs.HostLayout
+	Location uintptr
+	Length   uintptr
 }
 
 func send(id objc.ID, sel objc.SEL, args ...any) objc.ID {

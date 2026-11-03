@@ -2,7 +2,8 @@
 //
 // 平台壳只负责把系统事件或触摸翻译成这里的动作，再把 Result 落到预编辑、
 // 候选条和正文。标点、全半角、中英模式、Shift、临时英文、空格/回车/退格
-// 以及中英文之间的自动补空格都在这里维护，两端不再各写一份。
+// 以及中英文之间的自动补空格都在这里维护，两端不再各写一份。补空格的判断
+// 靠平台壳提供的 lookbehind 读光标前一个字符，规则层不猜正文内容。
 package input
 
 import (
@@ -19,7 +20,7 @@ const (
 	English
 )
 
-// class 是刚上屏内容的类别，用来判断中英文之间要不要补空格。
+// class 是字符的类别，用来判断中英文之间要不要补空格。
 type class int
 
 const (
@@ -37,22 +38,20 @@ type Result struct {
 	FullWidth bool
 }
 
-// histLen 是上屏记录的长度上限。退格最多回退这么多格，
-// 再往前删就当位置未知，不再补空格。
-const histLen = 64
-
 // Session 持有一次输入过程的全部规则状态。它只在主线程使用，不加锁。
 type Session struct {
 	eng       *engine.Engine
 	mode      Mode
 	fullWidth bool
 	punctAlt  [128]bool
-	prevClass class
-	prevDigit bool
-	hist      []rune
+	before    func() (rune, bool)
 	inline    string
 	inlineSp  bool
 }
+
+// SetLookbehind 设置「读光标前一个字符」的钩子。平台壳用它查宿主正文，
+// 判断中英文之间要不要补空格。不设置或返回 false 时当作前面没有字符。
+func (s *Session) SetLookbehind(fn func() (rune, bool)) { s.before = fn }
 
 // New 建立规则状态机。eng 可以为 nil，此时只做缓冲和标点规则（用于测试）。
 func New(eng *engine.Engine) *Session {
@@ -141,17 +140,16 @@ func (s *Session) ShiftLetter(ch byte) Result {
 	}
 	if s.Buffer() != "" {
 		s.inline = s.Buffer() + string(ch)
-		s.inlineSp = s.prevClass == classCJK
+		s.inlineSp = s.lastClass() == classCJK
 		if s.eng != nil {
 			s.eng.Reset()
 		}
 		return s.result("", true)
 	}
 	text := string(ch)
-	if s.prevClass == classCJK {
+	if s.lastClass() == classCJK {
 		text = " " + text
 	}
-	s.push(text)
 	return s.result(text, true)
 }
 
@@ -182,7 +180,6 @@ func (s *Session) Space() Result {
 		}
 		return s.result(s.commitRaw(), true)
 	}
-	s.push(" ")
 	return s.result("", false)
 }
 
@@ -190,15 +187,12 @@ func (s *Session) Space() Result {
 // 没有组合时返回 Consumed=false，让平台按自己的语义换行。
 func (s *Session) Return() Result {
 	if s.inline != "" {
-		text := s.commitInline(false)
 		// 回车结束不补空格，后面紧接中文也不自动加。
-		s.Untrack()
-		return s.result(text, true)
+		return s.result(s.commitInline(false), true)
 	}
 	if s.mode == Chinese && s.Buffer() != "" && s.eng != nil {
 		return s.result(s.commitRaw(), true)
 	}
-	s.Untrack()
 	return s.result("", false)
 }
 
@@ -215,8 +209,6 @@ func (s *Session) Backspace() Result {
 		s.eng.Backspace()
 		return s.result("", true)
 	}
-	// 平台会删掉正文一格，记录跟着退一格，恢复被删字符前面的类别。
-	s.drop()
 	return s.result("", false)
 }
 
@@ -289,16 +281,15 @@ func (s *Session) Punctuate(ch byte) Result {
 		}
 	}
 	punct := s.punctuate(ch)
-	if alt, ok := numberPunct(s.prevDigit, ch); ok {
+	if alt, ok := numberPunct(s.lastDigit(), ch); ok {
 		punct = alt
 	}
 	out += punct
-	s.push(punct)
 	return s.result(out, true)
 }
 
-// Passthrough 处理交给应用的按键：先把组合上屏，再按字符类别更新
-// 自动补空格的状态。Text 是需要在应用处理按键前插入的空格。
+// Passthrough 处理交给应用的按键：先把组合上屏，再按光标前的字符决定
+// 要不要补空格。Text 是需要在应用处理按键前插入的空格。
 func (s *Session) Passthrough(ch byte) Result {
 	out := ""
 	if s.inline != "" {
@@ -309,16 +300,9 @@ func (s *Session) Passthrough(ch byte) Result {
 			out += s.commitText(cand)
 		}
 	}
-	if ch < 0x20 {
-		// 方向键、回车、Tab 之类：光标位置可能变了，不再跟踪。
-		s.Untrack()
-		return s.result(out, false)
-	}
-	if s.prevClass == classCJK && isASCIIAlnum(ch) {
+	if isASCIIAlnum(ch) && s.lastClass() == classCJK {
 		out += " "
-		s.push(" ")
 	}
-	s.push(string(rune(ch)))
 	return s.result(out, false)
 }
 
@@ -377,7 +361,6 @@ func (s *Session) Finish() Result {
 	}
 	s.inline = ""
 	s.inlineSp = false
-	s.Untrack()
 	return s.result(out, out != "")
 }
 
@@ -388,45 +371,28 @@ func (s *Session) Reset() {
 	}
 	s.inline = ""
 	s.inlineSp = false
-	s.Untrack()
 }
 
-// Untrack 忘掉已经上屏的文字。光标可能被换行、快捷键或切窗口挪走时调用，
-// 免得下次按错的类别补空格。
-func (s *Session) Untrack() {
-	s.hist = s.hist[:0]
-	s.sync()
+// lastClass 返回光标前一个字符的类别，用于判断要不要补空格。
+// 问不到宿主正文时按「前面没有字符」处理。
+func (s *Session) lastClass() class {
+	if s.before == nil {
+		return classNone
+	}
+	r, ok := s.before()
+	if !ok {
+		return classNone
+	}
+	return classOfRune(r)
 }
 
-// push 记下刚上屏的文字，并更新用于补空格的类别。
-func (s *Session) push(text string) {
-	if text == "" {
-		return
+// lastDigit 判断光标前一个字符是不是 ASCII 数字，用于数字后的半角句号。
+func (s *Session) lastDigit() bool {
+	if s.before == nil {
+		return false
 	}
-	s.hist = append(s.hist, []rune(text)...)
-	if n := len(s.hist); n > histLen {
-		copy(s.hist, s.hist[n-histLen:])
-		s.hist = s.hist[:histLen]
-	}
-	s.sync()
-}
-
-// drop 退掉一格上屏记录，用于平台删掉正文一个字符之后。
-func (s *Session) drop() {
-	if n := len(s.hist); n > 0 {
-		s.hist = s.hist[:n-1]
-	}
-	s.sync()
-}
-
-// sync 用记录里最后一格恢复 prevClass / prevDigit。
-func (s *Session) sync() {
-	s.prevClass, s.prevDigit = classNone, false
-	if n := len(s.hist); n > 0 {
-		r := s.hist[n-1]
-		s.prevClass = classOfRune(r)
-		s.prevDigit = r < 0x80 && isASCIIDigit(byte(r))
-	}
+	r, ok := s.before()
+	return ok && r < 0x80 && isASCIIDigit(byte(r))
 }
 
 func (s *Session) punctuate(ch byte) string {
@@ -448,10 +414,9 @@ func (s *Session) commitText(text string) string {
 		return ""
 	}
 	out := text
-	if s.prevClass == classASCII && classOf(text) == classCJK {
+	if classOf(text) == classCJK && s.lastClass() == classASCII {
 		out = " " + out
 	}
-	s.push(out)
 	return out
 }
 
@@ -465,10 +430,9 @@ func (s *Session) commitRaw() string {
 		s.eng.Reset()
 	}
 	text := buf
-	if s.prevClass == classCJK {
+	if s.lastClass() == classCJK {
 		text = " " + text
 	}
-	s.push(text)
 	return text
 }
 
@@ -484,7 +448,6 @@ func (s *Session) commitInline(trailingSpace bool) string {
 	}
 	s.inline = ""
 	s.inlineSp = false
-	s.push(text)
 	return text
 }
 
@@ -514,7 +477,7 @@ func classOfRune(r rune) class {
 	return classNone
 }
 
-// classOf 判断一段刚上屏的文字属于哪一类，用于后续的空格判断。
+// classOf 判断一段要上屏的文字属于哪一类，用于决定要不要在前面补空格。
 func classOf(s string) class {
 	switch {
 	case startsWithHan(s):

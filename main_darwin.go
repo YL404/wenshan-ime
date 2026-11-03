@@ -59,6 +59,14 @@ func main() {
 	eng.SetUserDict(engine.LoadUserDict(userDictPath()))
 	eng.SetPhrases(engine.LoadUserDict(phrasesPath()))
 	sess = input.New(eng)
+	// 补空格的判断要读宿主正文：光标前一个字符。查不到就当前面没有字符。
+	sess.SetLookbehind(func() (rune, bool) {
+		r, ok := charBefore(curClient)
+		if debugKeys {
+			logf("lookbehind %q ok=%v", r, ok)
+		}
+		return r, ok
+	})
 
 	app := send(objc.ID(objc.GetClass("NSApplication")), selSharedApplication)
 	if app == 0 {
