@@ -656,7 +656,7 @@ final class KeyboardViewController: UIInputViewController {
         case .ready:
             status = model.mode == .chinese ? "文山" : "English"
         }
-        candidateBar.setCandidates(model.candidates, status: status, preedit: model.preedit)
+        candidateBar.setCandidates(model.candidates, status: status)
     }
 
     private func updateMarkedText() {

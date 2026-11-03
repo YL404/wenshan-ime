@@ -507,12 +507,10 @@ final class CandidateBar: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func setCandidates(_ candidates: [String], status: String?, preedit: String = "") {
+    func setCandidates(_ candidates: [String], status: String?) {
         let changed = candidates != self.candidates
         self.candidates = candidates
-        statusLabel.text = preedit.isEmpty ? status : preedit
-        statusLabel.textColor = preedit.isEmpty ? .secondaryLabel : .label
-        statusLabel.accessibilityLabel = preedit.isEmpty ? status : "编码 \(preedit)"
+        statusLabel.text = status
         collectionView.isHidden = candidates.isEmpty
         prevButton.isHidden = candidates.isEmpty
         nextButton.isHidden = candidates.isEmpty
