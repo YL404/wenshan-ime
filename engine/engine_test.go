@@ -662,6 +662,34 @@ func BenchmarkTypicalKey(b *testing.B) {
 	}
 }
 
+// BenchmarkRealDict 用构建出的真实词表测每次按键的耗时，按 macOS 的路径
+// 每键后问一次 HasNextPage。没有 dict.bin（未构建过）时跳过。
+func BenchmarkRealDict(b *testing.B) {
+	data, err := os.ReadFile("../dict.bin")
+	if err != nil {
+		b.Skip("没有 dict.bin，先跑 scripts/build.sh")
+	}
+	d, err := OpenDict(data)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, keys := range []string{"yi", "nihk", "wofaxmv", "womfjixvuiyi"} {
+		b.Run(keys, func(b *testing.B) {
+			e := New(d)
+			e.SetFreq(&Freq{counts: map[string]uint32{"一": 3, "我们": 3}})
+			b.ReportAllocs()
+			for b.Loop() {
+				e.Reset()
+				for i := 0; i < len(keys); i++ {
+					e.Type(keys[i])
+					e.HasNextPage()
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Microseconds())/float64(b.N)/float64(len(keys)), "µs/key")
+		})
+	}
+}
+
 // 常用词即使词库权重排在首页之外，选得多了也要能提到首页；
 // 翻页补算时已经看过的页不能变。
 func TestFreqBeyondFirstPage(t *testing.T) {

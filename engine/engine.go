@@ -172,7 +172,8 @@ func (e *Engine) selectCandidate(i int, pick func(string) string) (string, bool)
 	return text, true
 }
 
-// refresh 重建候选流并回到第 1 页。每次按键只算到第 1 页；后续页在翻页
+// refresh 重建候选流并回到第 1 页。每次按键算到第 2 页：候选窗要靠
+// HasNextPage 判断有没有下一页，一次算够免得每键重算两遍。后续页在翻页
 // 或查询时由 ensure 按需补算，避免热路径一次性构建整个候选池。
 func (e *Engine) refresh() {
 	e.stream = nil
@@ -183,7 +184,7 @@ func (e *Engine) refresh() {
 	if e.dict == nil || len(e.buf) == 0 {
 		return
 	}
-	e.ensure(pageSize)
+	e.ensure(2 * pageSize)
 }
 
 // ensure 保证 stream 至少有 n 个候选，或已经到底。limit 按指数增长，避免

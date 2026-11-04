@@ -172,12 +172,7 @@ func (d *Dict) prefixInto(best []Candidate, prefix []byte, limit int, f *Freq) [
 			break
 		}
 		scanned++
-		text := string(d.text(i))
-		best = insertCandidate(best, Candidate{
-			Text:    text,
-			CodeLen: len(code),
-			score:   lookupScore(d.weight(i), len(code), len(prefix)) + f.boost(text),
-		}, limit)
+		best = d.offer(best, i, len(code), lookupScore(d.weight(i), len(code), len(prefix)), limit, f)
 	}
 	return best
 }
@@ -189,14 +184,34 @@ func (d *Dict) exactInto(best []Candidate, code []byte, bufLen, limit int, f *Fr
 		if len(c) != len(code) || !bytes.Equal(c, code) {
 			break
 		}
-		text := string(d.text(i))
-		best = insertCandidate(best, Candidate{
-			Text:    text,
-			CodeLen: len(code),
-			score:   lookupScore(d.weight(i), len(code), bufLen) + f.boost(text),
-		}, limit)
+		best = d.offer(best, i, len(code), lookupScore(d.weight(i), len(code), bufLen), limit, f)
 	}
 	return best
+}
+
+// offer 把第 i 条以基础分 base 合进 best。前缀扫描一次要看上万条，绝大多数
+// 进不了前 limit 个：先用词频加权的上限判断，再查实际词频，都过了才复制
+// 词条文本，省掉热路径上的绝大部分分配。
+func (d *Dict) offer(best []Candidate, i, codeLen int, base int64, limit int, f *Freq) []Candidate {
+	if !admits(best, limit, base+f.maxBoost(), codeLen) {
+		return best
+	}
+	raw := d.text(i)
+	score := base + f.boostBytes(raw)
+	if !admits(best, limit, score, codeLen) {
+		return best
+	}
+	return insertCandidate(best, Candidate{Text: string(raw), CodeLen: codeLen, score: score}, limit)
+}
+
+// admits 报告分数 score、编码长 codeLen 的候选能否进入按 better 排好、
+// 最多 limit 个的 best。和 insertCandidate 的取舍条件一致。
+func admits(best []Candidate, limit int, score int64, codeLen int) bool {
+	if len(best) < limit {
+		return true
+	}
+	last := best[len(best)-1]
+	return score > last.score || score == last.score && codeLen < last.CodeLen
 }
 
 // 拼接参数：单个词最多覆盖 8 个音节；每多切一个词扣 segmentPenalty。

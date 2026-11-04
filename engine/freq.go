@@ -96,11 +96,13 @@ func (f *Freq) Save() error {
 // freqBoost 把「选过 n 次」折算成排序加权。封顶是为了不让个别词永远霸榜，
 // 同时也保证它只影响层内的顺序，翻不过「整段匹配」那一层。
 func freqBoost(n uint32) int64 {
-	if n > 50 {
-		n = 50
-	}
-	return int64(n) * 1_000_000
+	return int64(min(n, maxBoostCount)) * boostPerPick
 }
+
+const (
+	maxBoostCount = 50
+	boostPerPick  = 1_000_000
+)
 
 // boost 返回 text 的词频加权。f 为 nil 时不加权。
 func (f *Freq) boost(text string) int64 {
@@ -108,4 +110,20 @@ func (f *Freq) boost(text string) int64 {
 		return 0
 	}
 	return freqBoost(f.counts[text])
+}
+
+// boostBytes 同 boost，直接用字节切片查表，不分配字符串。
+func (f *Freq) boostBytes(text []byte) int64 {
+	if f == nil {
+		return 0
+	}
+	return freqBoost(f.counts[string(text)])
+}
+
+// maxBoost 是任何词能拿到的最大加权，用来在查表前先排除进不了候选的词。
+func (f *Freq) maxBoost() int64 {
+	if f == nil {
+		return 0
+	}
+	return maxBoostCount * boostPerPick
 }
