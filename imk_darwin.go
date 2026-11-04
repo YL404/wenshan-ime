@@ -466,7 +466,7 @@ func showCandidates(client objc.ID) {
 		hideCandidates()
 		return
 	}
-	cand.showCandidates(cands, candCaret)
+	cand.showCandidates(cands, candCaret, sess.PageNo(), sess.HasNextPage())
 }
 
 func hideCandidates() {

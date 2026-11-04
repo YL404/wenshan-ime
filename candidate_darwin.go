@@ -90,11 +90,12 @@ const (
 type NSSize = NSPoint
 
 type candWindow struct {
-	panel   objc.ID
-	content objc.ID
-	bg      [maxChips]objc.ID // 圆角色块
-	labels  [maxChips]objc.ID // 色块上的序号
-	chips   [maxChips]objc.ID // 色块上的候选文字
+	panel    objc.ID
+	content  objc.ID
+	bg       [maxChips]objc.ID // 圆角色块
+	labels   [maxChips]objc.ID // 色块上的序号
+	chips    [maxChips]objc.ID // 色块上的候选文字
+	pageHint objc.ID           // 候选条右端的页码 / 到底提示
 
 	// 下面这些对象要跨事件循环一直用，必须自己 retain：
 	// NSFont/NSColor/NSDictionary 的构造方法返回的都是自动释放对象，
@@ -226,17 +227,39 @@ func (c *candWindow) ensure() bool {
 		c.bg[i], c.labels[i], c.chips[i] = bg, label, chip
 	}
 
+	// 页码 / 到底提示是一个独立的小字视图，放在候选条右端，不占 9 个候选槽。
+	hint := send(send(objc.ID(objc.GetClass("NSTextField")), selAlloc), selInitWithFrame, NSRect{W: 10, H: 10})
+	send(hint, selSetBezeled, false)
+	send(hint, selSetDrawsBackground, false)
+	send(hint, selSetEditable, false)
+	send(hint, selSetSelectable, false)
+	send(hint, selSetFont, c.labelFont)
+	send(hint, selSetSingleLine, true)
+	send(hint, selSetLineBreak, uintptr(2))
+	send(hint, selSetHidden, true)
+	send(content, selAddSubview, hint)
+	c.pageHint = hint
+
 	c.panel, c.content = panel, content
 	return true
 }
 
-// showCandidates 显示候选列表，selected 指定的那个填蓝色。
-func (c *candWindow) showCandidates(cands []engine.Candidate, caret NSRect) {
+// showCandidates 显示候选列表，selected 指定的那个填蓝色。pageNo /
+// hasNext 用来在右端标出页码和「还有更多」，翻到末页时不再静默无提示：
+// 有箭头表示还能往下翻，没箭头就是到底了。
+func (c *candWindow) showCandidates(cands []engine.Candidate, caret NSRect, pageNo int, hasNext bool) {
 	if !c.ensure() {
 		return
 	}
 	c.hud = false
-	c.layout(candidateItems(cands), 0, caret)
+	hint := ""
+	if pageNo > 0 || hasNext {
+		hint = strconv.Itoa(pageNo + 1)
+		if hasNext {
+			hint += " ›"
+		}
+	}
+	c.layout(candidateItems(cands), 0, caret, hint)
 }
 
 // candidateItem 是一个候选的两个显示部分：序号和正文分开排版。
@@ -260,7 +283,7 @@ func (c *candWindow) showText(text string, caret NSRect) {
 		return
 	}
 	c.hud = true
-	c.layout([]candidateItem{{text: text}}, -1, caret)
+	c.layout([]candidateItem{{text: text}}, -1, caret, "")
 }
 
 // lightAppearance 判断系统当前是不是浅色外观。按 NSApp.effectiveAppearance
@@ -279,8 +302,9 @@ func (c *candWindow) lightAppearance() bool {
 	return best != 0 && send(best, selIsEqualToString, c.darkName) == 0
 }
 
-// layout 依次排好色块，再按内容调整面板大小和位置。
-func (c *candWindow) layout(items []candidateItem, selected int, caret NSRect) {
+// layout 依次排好色块，再按内容调整面板大小和位置。hint 非空时在右端
+// 追加页码 / 到底提示。
+func (c *candWindow) layout(items []candidateItem, selected int, caret NSRect, hint string) {
 	// 每次绘制都按系统当前深浅选一遍配色：面板开着时用户切深浅模式，
 	// 下一次出候选就跟着变了，不用额外监听通知。
 	light := c.lightAppearance()
@@ -367,6 +391,26 @@ func (c *candWindow) layout(items []candidateItem, selected int, caret NSRect) {
 		})
 		x += w + candGap
 		maxH = max(maxH, h)
+	}
+
+	// 页码 / 到底提示单独一个视图，接在最后一个候选右侧，不占候选槽位。
+	if c.pageHint != 0 {
+		if hint == "" {
+			send(c.pageHint, selSetHidden, true)
+		} else {
+			send(c.pageHint, selSetHidden, false)
+			send(c.pageHint, selSetTextColor, labelDim)
+			ns := nsString(hint)
+			send(c.pageHint, selSetStringValue, ns)
+			hs := objc.Send[NSSize](ns, selSizeWithAttributes, c.labelAttrs)
+			send(ns, selRelease)
+			hw := math.Ceil(hs.X) + 4
+			hh := math.Ceil(hs.Y)
+			send(c.pageHint, selSetFrame, NSRect{
+				X: math.Round(x), Y: candOuter + (maxH-hh)/2, W: hw, H: hh,
+			})
+			x += hw + candGap
+		}
 	}
 
 	width := x - candGap + candOuter

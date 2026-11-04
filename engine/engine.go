@@ -10,24 +10,29 @@ const (
 	maxCandidates = 9
 	// pageSize 是一页的候选数，对应数字键 1-9。
 	pageSize = maxCandidates
-	// maxPages 是候选总页数上限。多音节输入的候选池通常不到 180 个
-	// （jintian 137、womf 175），20 页基本能翻完；单音节前缀能拖出
-	// 几千个词，更深的候选价值低，一次性构建也会拖慢主线程。
+	// maxPages 只用于 iOS 键盘一次性展开全部候选的网格上限；逐页翻页不受
+	// 它限制，能一直翻到词库给不出更多候选为止。
 	maxPages = 20
+	// maxCorrections 是纠错段最多保留的候选数。
+	maxCorrections = 20
 )
 
 // Engine 持有一次输入过程的全部状态。它只在主线程上被调用，不加锁。
 type Engine struct {
-	dict      *Dict
-	freq      *Freq
-	user      *UserDict
-	phrases   *UserDict
-	buf       []byte
-	cands     []Candidate // 当前页
-	first     []Candidate // 第 1 页，翻页时用来还原
-	deep      []Candidate // 第 2 页起的候选，按页切
+	dict    *Dict
+	freq    *Freq
+	user    *UserDict
+	phrases *UserDict
+	buf     []byte
+
+	// stream 是单一有序候选流：正常候选按分数降序，词库到底后把纠错候选
+	// 接在末尾。翻页只是对它的窗口切片，首页和后续页不再各算一份，边界
+	// 因此是连续的。只算到「当前需要的页数」，热路径不构建整个候选池。
+	stream    []Candidate
+	limit     int  // 当前 stream 正常段计算时用的上限
+	exhausted bool // 正常段是否已到词库的底
+	cands     []Candidate // 当前页 = stream 的切片
 	page      int
-	deepReady bool
 
 	// 自造词的学习状态：本次组合输入过的全部按键、连续单字选出来的文字。
 	session      []byte
@@ -81,6 +86,9 @@ func (e *Engine) Buffer() []byte { return e.buf }
 // Candidates 返回当前页的候选，第一个是默认上屏项。
 func (e *Engine) Candidates() []Candidate { return e.cands }
 
+// PageNo 返回当前页码（0 起）。
+func (e *Engine) PageNo() int { return e.page }
+
 // Type 追加一个字母。返回 false 表示缓冲已满，按键未消费。
 func (e *Engine) Type(ch byte) bool {
 	if len(e.buf) >= maxBuf {
@@ -110,11 +118,11 @@ func (e *Engine) Backspace() bool {
 // Reset 清空缓冲和这一轮的自造词学习状态。
 func (e *Engine) Reset() {
 	e.buf = e.buf[:0]
+	e.stream = nil
+	e.limit = 0
+	e.exhausted = false
 	e.cands = nil
-	e.first = nil
-	e.deep = nil
 	e.page = 0
-	e.deepReady = false
 	e.session = e.session[:0]
 	e.picked = e.picked[:0]
 	e.singles = 0
@@ -183,118 +191,144 @@ func (e *Engine) selectCandidate(i int, pick func(string) string) (string, bool)
 	return text, true
 }
 
-// refresh 重新计算第 1 页候选。一个音节两个键，所以至少两键才有意义。
+// refresh 重建候选流并回到第 1 页。每次按键只算到第 1 页；后续页在翻页
+// 或查询时由 ensure 按需补算，避免热路径一次性构建整个候选池。
 func (e *Engine) refresh() {
+	e.stream = nil
+	e.limit = 0
+	e.exhausted = false
 	e.cands = nil
-	e.first = nil
-	e.deep = nil
 	e.page = 0
-	e.deepReady = false
 	if e.dict == nil || len(e.buf) == 0 {
 		return
 	}
-	first := e.collect(e.buf, pageSize, true, nil)
+	e.ensure(pageSize)
+}
+
+// ensure 保证 stream 至少有 n 个候选，或已经到底。limit 按指数增长，避免
+// 每翻一页都全量重算；扩大上限只在尾部追加更低分的候选，前面的顺序不变，
+// 所以翻页补算不会让已经看过的页跳动。
+func (e *Engine) ensure(n int) {
+	for len(e.stream) < n && !e.exhausted {
+		e.rebuild(max(n, e.limit*2, pageSize))
+	}
+}
+
+// rebuild 重新计算正常候选到 limit 个。不足说明词库到底，顺带把纠错候选
+// 接在末尾；纠错挂在 tierTypo 层，永远排在正常候选之后，不再单独占首页
+// 座位。rebuild 换了底层数组，末尾重新把当前页指向新的 stream。
+func (e *Engine) rebuild(limit int) {
+	normal := e.collect(e.buf, limit, nil)
 	// j/q/x/y 后的 ü 在自然码里按 v 键存，但 Rime 也接受照拼音写成 u。
 	if alt, ok := umlautVariant(e.buf); ok {
-		first = e.collect(alt, pageSize, true, first)
+		normal = e.collect(alt, limit, normal)
 	}
-	e.applyFreq(first)
-	e.first = first
-	e.cands = first
+	e.applyFreq(normal)
+	e.limit = limit
+	e.exhausted = len(normal) < limit
+	if e.exhausted {
+		normal = append(normal, e.corrections(e.buf, normal)...)
+	}
+	e.stream = normal
+	if e.page*pageSize < len(e.stream) {
+		e.setPage(e.page)
+	}
 }
 
-// Page 翻页。delta 为 +1/-1，返回 false 表示没有翻动（已到首页/末页）。
-func (e *Engine) Page(delta int) bool {
-	if delta == 0 || len(e.first) == 0 {
-		return false
+// corrections 返回纠错候选，按文本去掉正常段里已有的词。只在正常段到底后
+// 调用，所以它们作为流末尾固定的一段，位置不随翻页补算漂移。
+func (e *Engine) corrections(buf []byte, normal []Candidate) []Candidate {
+	corrs := e.dict.Corrections(buf, maxCorrections)
+	if alt, ok := umlautVariant(buf); ok {
+		corrs = mergeCandidates(corrs, e.dict.Corrections(alt, maxCorrections), maxCorrections)
 	}
-	target := e.page + delta
-	if target < 0 || target >= maxPages {
-		return false
-	}
-	if target == 0 {
-		e.page = 0
-		e.cands = e.first
-		return true
-	}
-	if !e.deepReady {
-		e.buildDeep()
-		e.deepReady = true
-	}
-	start := (target - 1) * pageSize
-	if start >= len(e.deep) {
-		return false
-	}
-	end := min(start+pageSize, len(e.deep))
-	e.page = target
-	e.cands = e.deep[start:end]
-	return true
-}
-
-// AllCandidates 返回第 1 页和后续页的全部候选，供键盘一次展开。
-// 它只补建后续页，不改变当前页。
-func (e *Engine) AllCandidates() []Candidate {
-	if len(e.first) == 0 {
-		return nil
-	}
-	if !e.deepReady {
-		e.buildDeep()
-		e.deepReady = true
-	}
-	out := make([]Candidate, 0, len(e.first)+len(e.deep))
-	out = append(out, e.first...)
-	out = append(out, e.deep...)
-	return out
-}
-
-// SelectGlobal 选出全部候选里的第 i 个。索引落在后续页时先把该页
-// 装进 e.cands，再走和 Select 相同的上屏路径。
-func (e *Engine) SelectGlobal(i int) (string, bool) {
-	if i < 0 || len(e.first) == 0 {
-		return "", false
-	}
-	if i < len(e.first) {
-		e.page = 0
-		e.cands = e.first
-		return e.Select(i)
-	}
-	if !e.deepReady {
-		e.buildDeep()
-		e.deepReady = true
-	}
-	j := i - len(e.first)
-	if j >= len(e.deep) {
-		return "", false
-	}
-	page := j/pageSize + 1
-	start := (page - 1) * pageSize
-	end := min(start+pageSize, len(e.deep))
-	e.page = page
-	e.cands = e.deep[start:end]
-	return e.Select(j - start)
-}
-
-// buildDeep 生成第 1 页之外的候选。第 1 页保持 refresh 的结果不变，
-// 这里只补后续页，并按文本去掉已经在第 1 页出现过的词。
-func (e *Engine) buildDeep() {
-	e.deep = nil
-	if e.dict == nil || len(e.buf) == 0 {
-		return
-	}
-	// 多取一页的容量：第 1 页的候选可能被纠错候选挤掉几位，过滤后仍要够分页。
-	limit := maxPages * pageSize
-	deep := e.collect(e.buf, limit, false, nil)
-	if alt, ok := umlautVariant(e.buf); ok {
-		deep = e.collect(alt, limit, false, deep)
-	}
-	e.applyFreq(deep)
-	out := make([]Candidate, 0, len(deep))
-	for _, c := range deep {
-		if !hasText(e.first, c.Text) {
+	out := make([]Candidate, 0, len(corrs))
+	for _, c := range corrs {
+		if !hasText(normal, c.Text) && !hasText(out, c.Text) {
 			out = append(out, c)
 		}
 	}
-	e.deep = out
+	return out
+}
+
+// collect 收集一种拼写下的正常候选，最多 limit 个。纠错候选不在这里处理，
+// 它们由 corrections 单独接在流末尾，免得「留座位」逻辑让排序随上限漂移。
+func (e *Engine) collect(buf []byte, limit int, cands []Candidate) []Candidate {
+	if len(buf) == 1 {
+		// 单键：给出这个键开头的最高频词，例如 l → 了。
+		cands = mergeCandidates(cands, e.dict.Short(buf[0]), limit)
+	} else {
+		cands = mergeCandidates(cands, e.dict.Lookup(buf, limit), limit)
+		for _, c := range e.dict.Compose(buf, limit) {
+			cands = insertCandidate(cands, c, limit)
+		}
+	}
+	if e.phrases != nil {
+		cands = mergeCandidates(cands, e.phrases.Lookup(buf, limit), limit)
+	}
+	if e.user != nil {
+		cands = mergeCandidates(cands, e.user.Lookup(buf, limit), limit)
+	}
+	return cands
+}
+
+// setPage 把当前页指向 stream 的第 target 页切片。调用前须保证该页有候选。
+func (e *Engine) setPage(target int) {
+	start := target * pageSize
+	end := min((target+1)*pageSize, len(e.stream))
+	e.page = target
+	e.cands = e.stream[start:end]
+}
+
+// Page 翻页。delta 为 +1/-1，返回 false 表示没有翻动（已到首页/末页）。
+// 不再有硬页数上限：翻到词库给不出更多候选才停。
+func (e *Engine) Page(delta int) bool {
+	if delta == 0 || len(e.stream) == 0 {
+		return false
+	}
+	target := e.page + delta
+	if target < 0 {
+		return false
+	}
+	e.ensure((target + 1) * pageSize)
+	if target*pageSize >= len(e.stream) {
+		return false
+	}
+	e.setPage(target)
+	return true
+}
+
+// HasNextPage 报告是否还有下一页。按需把流补到下一页页尾再判断，到底后
+// 长度固定，结果是确定的；UI 据此显示页码和「还有更多」，不必知道总页数。
+func (e *Engine) HasNextPage() bool {
+	if len(e.stream) == 0 {
+		return false
+	}
+	e.ensure((e.page + 2) * pageSize)
+	return len(e.stream) > (e.page+1)*pageSize
+}
+
+// AllCandidates 返回流里的全部候选（最多 maxPages 页），供键盘一次展开。
+// 它只补建流，不改变当前页。
+func (e *Engine) AllCandidates() []Candidate {
+	if len(e.stream) == 0 {
+		return nil
+	}
+	e.ensure(maxPages * pageSize)
+	return e.stream[:min(maxPages*pageSize, len(e.stream))]
+}
+
+// SelectGlobal 选出流里的第 i 个候选，索引可以落在后续页。
+func (e *Engine) SelectGlobal(i int) (string, bool) {
+	if i < 0 {
+		return "", false
+	}
+	e.ensure(i + 1)
+	if i >= len(e.stream) {
+		return "", false
+	}
+	e.cands = e.stream
+	return e.Select(i)
 }
 
 func hasText(cands []Candidate, text string) bool {
@@ -330,40 +364,6 @@ func (e *Engine) applyFreq(cands []Candidate) {
 			return 0
 		})
 	}
-}
-
-// collect 收集一种拼写下的候选，最多 limit 个。withCorrections 为 true 时
-// 把纠错候选放到末尾，并给它们留两个座位；第 2 页起不再重复纠错候选。
-func (e *Engine) collect(buf []byte, limit int, withCorrections bool, cands []Candidate) []Candidate {
-	if len(buf) == 1 {
-		// 单键：给出这个键开头的最高频词，例如 l → 了。
-		cands = mergeCandidates(cands, e.dict.Short(buf[0]), limit)
-	} else {
-		cands = mergeCandidates(cands, e.dict.Lookup(buf, limit), limit)
-		for _, c := range e.dict.Compose(buf, limit) {
-			cands = insertCandidate(cands, c, limit)
-		}
-	}
-	if e.phrases != nil {
-		cands = mergeCandidates(cands, e.phrases.Lookup(buf, limit), limit)
-	}
-	if e.user != nil {
-		cands = mergeCandidates(cands, e.user.Lookup(buf, limit), limit)
-	}
-	if !withCorrections {
-		return cands
-	}
-	// 按错一键的纠错：给纠错行留两个座位，挤掉排尾的正常候选，
-	// 不让「打错的输入恰好也是合法音节」时凑出来的候选把它挤没。
-	if corrs := e.dict.Corrections(buf, limit); len(corrs) > 0 {
-		if len(cands) > limit-2 {
-			cands = cands[:limit-2]
-		}
-		for _, c := range corrs {
-			cands = insertCandidate(cands, c, limit)
-		}
-	}
-	return cands
 }
 
 // umlautVariant 把 j/q/x/y + u 的两键组合改写成 j/q/x/y + v。

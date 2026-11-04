@@ -162,25 +162,77 @@ func TestPaging(t *testing.T) {
 	}
 }
 
-// 候选够多时能翻到 maxPages 页，再往后停住。
+func candidateTexts(cands []Candidate) []string {
+	out := make([]string, len(cands))
+	for i, c := range cands {
+		out[i] = c.Text
+	}
+	return out
+}
+
+// 候选够多时能一直翻到词库真正的底，不再卡在固定的页数上限；逐页拼起来
+// 应该和整个流完全一致（单一有序流，首页和后续页不再各算一份）。
 func TestPagingLimit(t *testing.T) {
-	entries := make([]Entry, 0, 1000)
-	for i := 0; i < 1000; i++ {
+	const total = 1000
+	entries := make([]Entry, 0, total)
+	for i := 0; i < total; i++ {
 		entries = append(entries, Entry{
 			Code:   "ni",
 			Text:   strconv.Itoa(i),
-			Weight: uint32(10000 - i),
+			Weight: uint32(total*10 - i),
 		})
 	}
 	e := New(buildDict(t, entries))
 	e.Type('n')
 	e.Type('i')
+
+	seen := candidateTexts(e.Candidates())
 	pages := 1
 	for e.Page(1) {
 		pages++
+		seen = append(seen, candidateTexts(e.Candidates())...)
 	}
-	if pages != maxPages {
-		t.Fatalf("可翻 %d 页，期望上限 %d 页", pages, maxPages)
+	if pages <= maxPages {
+		t.Fatalf("只翻了 %d 页，应突破旧的 %d 页上限", pages, maxPages)
+	}
+	wantPages := (total + pageSize - 1) / pageSize
+	if pages != wantPages {
+		t.Fatalf("翻了 %d 页，期望 %d 页", pages, wantPages)
+	}
+	if len(seen) != total {
+		t.Fatalf("逐页共收集 %d 个候选，期望 %d", len(seen), total)
+	}
+	for i, s := range seen {
+		if s != strconv.Itoa(i) {
+			t.Fatalf("第 %d 个候选 = %q, 期望 %q（页边界不连续）", i, s, strconv.Itoa(i))
+		}
+	}
+}
+
+// HasNextPage/PageNo 给候选窗提供到底状态：25 个候选是 3 页，最后一页
+// 不能再报「还有下一页」。
+func TestHasNextPage(t *testing.T) {
+	entries := make([]Entry, 0, 25)
+	for i := 0; i < 25; i++ {
+		entries = append(entries, Entry{
+			Code:   "ni",
+			Text:   string(rune('a' + i)),
+			Weight: uint32(2500 - i),
+		})
+	}
+	e := New(buildDict(t, entries))
+	e.Type('n')
+	e.Type('i')
+	for page, wantNext := range []bool{true, true, false} {
+		if got := e.PageNo(); got != page {
+			t.Fatalf("第 %d 步页码 = %d", page, got)
+		}
+		if got := e.HasNextPage(); got != wantNext {
+			t.Fatalf("第 %d 页 HasNextPage = %v, 期望 %v", page+1, got, wantNext)
+		}
+		if wantNext && !e.Page(1) {
+			t.Fatalf("翻不到第 %d 页", page+2)
+		}
 	}
 }
 

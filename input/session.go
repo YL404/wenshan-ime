@@ -86,6 +86,22 @@ func (s *Session) Candidates() []engine.Candidate {
 	return s.eng.Candidates()
 }
 
+// PageNo 返回当前候选页码（0 起），供候选窗显示进度。
+func (s *Session) PageNo() int {
+	if s == nil || s.eng == nil {
+		return 0
+	}
+	return s.eng.PageNo()
+}
+
+// HasNextPage 报告是否还有下一页候选，供候选窗显示「还有更多 / 到底」。
+func (s *Session) HasNextPage() bool {
+	if s == nil || s.eng == nil {
+		return false
+	}
+	return s.eng.HasNextPage()
+}
+
 // AllCandidates 返回第 1 页和后续页的全部候选，供键盘展开显示。
 func (s *Session) AllCandidates() []engine.Candidate {
 	if s == nil || s.eng == nil {
