@@ -1,9 +1,6 @@
 package engine
 
-import (
-	"errors"
-	"slices"
-)
+import "errors"
 
 // maxBuf 是输入缓冲的上限（字节，双拼每音节两字节）。
 const maxBuf = 32
@@ -200,14 +197,14 @@ func (e *Engine) ensure(n int) {
 
 // rebuild 重新计算正常候选到 limit 个。不足说明词库到底，顺带把纠错候选
 // 接在末尾；纠错挂在 tierTypo 层，永远排在正常候选之后，不再单独占首页
-// 座位。rebuild 换了底层数组，末尾重新把当前页指向新的 stream。
+// 座位。用户词频在各来源截取前就计入分数，所以 limit 变大时只在尾部追加，
+// 已经看过的页不会变。rebuild 换了底层数组，末尾重新把当前页指向新的 stream。
 func (e *Engine) rebuild(limit int) {
 	normal := e.collect(e.buf, limit, nil)
 	// j/q/x/y 后的 ü 在自然码里按 v 键存，但 Rime 也接受照拼音写成 u。
 	if alt, ok := umlautVariant(e.buf); ok {
 		normal = e.collect(alt, limit, normal)
 	}
-	e.applyFreq(normal)
 	e.limit = limit
 	e.exhausted = len(normal) < limit
 	if e.exhausted {
@@ -240,18 +237,18 @@ func (e *Engine) corrections(buf []byte, normal []Candidate) []Candidate {
 func (e *Engine) collect(buf []byte, limit int, cands []Candidate) []Candidate {
 	if len(buf) == 1 {
 		// 单键：给出这个键开头的最高频词，例如 l → 了。
-		cands = mergeCandidates(cands, e.dict.Short(buf[0]), limit)
+		cands = mergeCandidates(cands, e.dict.Short(buf[0], e.freq), limit)
 	} else {
-		cands = mergeCandidates(cands, e.dict.Lookup(buf, limit), limit)
-		for _, c := range e.dict.Compose(buf, limit) {
+		cands = mergeCandidates(cands, e.dict.Lookup(buf, limit, e.freq), limit)
+		for _, c := range e.dict.Compose(buf, limit, e.freq) {
 			cands = insertCandidate(cands, c, limit)
 		}
 	}
 	if e.phrases != nil {
-		cands = mergeCandidates(cands, e.phrases.Lookup(buf, limit), limit)
+		cands = mergeCandidates(cands, e.phrases.Lookup(buf, limit, e.freq), limit)
 	}
 	if e.user != nil {
-		cands = mergeCandidates(cands, e.user.Lookup(buf, limit), limit)
+		cands = mergeCandidates(cands, e.user.Lookup(buf, limit, e.freq), limit)
 	}
 	return cands
 }
@@ -322,32 +319,6 @@ func hasText(cands []Candidate, text string) bool {
 		}
 	}
 	return false
-}
-
-// applyFreq 按用户的使用习惯重排层内顺序。加权只落在低位的权重区，
-// 所以翻不过「用掉多少键」那一层。
-func (e *Engine) applyFreq(cands []Candidate) {
-	if e.freq == nil || len(cands) < 2 {
-		return
-	}
-	changed := false
-	for i := range cands {
-		if n := e.freq.Count(cands[i].Text); n > 0 {
-			cands[i].score += freqBoost(n)
-			changed = true
-		}
-	}
-	if changed {
-		slices.SortFunc(cands, func(a, b Candidate) int {
-			switch {
-			case better(a, b):
-				return -1
-			case better(b, a):
-				return 1
-			}
-			return 0
-		})
-	}
 }
 
 // umlautVariant 把 j/q/x/y + u 的两键组合改写成 j/q/x/y + v。

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 )
@@ -305,7 +306,7 @@ func TestPrefixRanking(t *testing.T) {
 	}
 
 	// 打 ni：编码刚好用完的词优先，你 在第一。
-	got := d.Lookup([]byte("ni"), 9)
+	got := d.Lookup([]byte("ni"), 9, nil)
 	if len(got) == 0 || got[0].Text != "你" {
 		t.Fatalf("Lookup(ni) 首选 = %v", got)
 	}
@@ -317,18 +318,18 @@ func TestPrefixRanking(t *testing.T) {
 	}
 
 	// 打 nihk：整词优先，但前面已经打完的「你」仍然可选。
-	got = d.Lookup([]byte("nihk"), 9)
+	got = d.Lookup([]byte("nihk"), 9, nil)
 	if len(got) != 5 || got[0].Text != "你好" || got[1].Text != "霓虹" {
 		t.Fatalf("Lookup(nihk) = %v", got)
 	}
 
 	// 半截输入 nih 也能命中你好，CodeLen 是完整编码长度。
-	got = d.Lookup([]byte("nih"), 9)
+	got = d.Lookup([]byte("nih"), 9, nil)
 	if len(got) != 5 || got[0].Text != "你好" || got[0].CodeLen != 4 {
 		t.Fatalf("Lookup(nih) = %v", got)
 	}
 
-	if got := d.Lookup([]byte("zz"), 9); got != nil {
+	if got := d.Lookup([]byte("zz"), 9, nil); got != nil {
 		t.Errorf("Lookup(zz) = %v, 期望空", got)
 	}
 }
@@ -571,12 +572,12 @@ func TestRankingTiers(t *testing.T) {
 	})
 	// 打了 5 个键时，还没打完的长词应该排在「只用掉前两个键」的高频单字前面；
 	// 覆盖按键多的短词（我发）也比覆盖少的单字（我）更具体。
-	got := d.Lookup([]byte("wofax"), 9)
+	got := d.Lookup([]byte("wofax"), 9, nil)
 	if len(got) != 3 || got[0].Text != "我发现" || got[1].Text != "我发" || got[2].Text != "我" {
 		t.Fatalf("Lookup(wofax) = %v", got)
 	}
 	// 打满 wofa 时，刚好用完缓冲的词优先于更长的词。
-	got = d.Lookup([]byte("wofa"), 9)
+	got = d.Lookup([]byte("wofa"), 9, nil)
 	if got[0].Text != "我发" || got[1].Text != "我发现" {
 		t.Fatalf("Lookup(wofa) = %v", got)
 	}
@@ -658,6 +659,33 @@ func BenchmarkTypicalKey(b *testing.B) {
 		for _, ch := range []byte("womfjixv") {
 			e.Type(ch)
 		}
+	}
+}
+
+// 常用词即使词库权重排在首页之外，选得多了也要能提到首页；
+// 翻页补算时已经看过的页不能变。
+func TestFreqBeyondFirstPage(t *testing.T) {
+	var entries []Entry
+	for i := range 40 {
+		entries = append(entries, Entry{Code: "ni", Text: string(rune('一' + i)), Weight: uint32(10000 - i)})
+	}
+	d := buildDict(t, entries)
+	target := entries[38].Text // 词库权重第 39 名，首页 + 预取的第二页之外
+	f := &Freq{counts: map[string]uint32{target: 5}}
+	e := New(d)
+	e.SetFreq(f)
+	e.Type('n')
+	e.Type('i')
+	if got := e.Candidates(); got[0].Text != target {
+		t.Fatalf("选过 5 次的词没到首选: %v", candidateTexts(got))
+	}
+	first := candidateTexts(e.Candidates())
+	for e.Page(1) {
+	}
+	for e.Page(-1) {
+	}
+	if got := candidateTexts(e.Candidates()); !slices.Equal(got, first) {
+		t.Fatalf("翻到底再翻回首页变了: %v → %v", first, got)
 	}
 }
 
@@ -785,7 +813,7 @@ func TestLoadPhrases(t *testing.T) {
 	if p.Len() != 1 {
 		t.Fatalf("短语条数 = %d, 期望 1", p.Len())
 	}
-	got := p.Lookup([]byte("yx"), 9)
+	got := p.Lookup([]byte("yx"), 9, nil)
 	if len(got) != 1 || got[0].Text != "me@example.com" {
 		t.Fatalf("Lookup(yx) = %v", got)
 	}

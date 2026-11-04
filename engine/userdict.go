@@ -66,20 +66,21 @@ func (u *UserDict) Add(code, text string) bool {
 // Len 返回自造词条数。
 func (u *UserDict) Len() int { return len(u.entries) }
 
-// Lookup 返回编码以 prefix 开头的自造词。
-func (u *UserDict) Lookup(prefix []byte, limit int) []Candidate {
+// Lookup 返回编码以 prefix 开头的自造词，用户词频 f 计入分数，可以为 nil。
+func (u *UserDict) Lookup(prefix []byte, limit int, f *Freq) []Candidate {
 	if u == nil || len(prefix) == 0 || limit <= 0 {
 		return nil
 	}
+	p := string(prefix)
 	var out []Candidate
 	for _, e := range u.entries {
-		if !strings.HasPrefix(e.code, string(prefix)) {
+		if !strings.HasPrefix(e.code, p) {
 			continue
 		}
 		out = insertCandidate(out, Candidate{
 			Text:    e.text,
 			CodeLen: len(e.code),
-			score:   candidateScore(userWeight, len(e.code), len(prefix)),
+			score:   candidateScore(userWeight, len(e.code), len(prefix)) + f.boost(e.text),
 		}, limit)
 	}
 	return out

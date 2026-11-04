@@ -101,3 +101,11 @@ func freqBoost(n uint32) int64 {
 	}
 	return int64(n) * 1_000_000
 }
+
+// boost 返回 text 的词频加权。f 为 nil 时不加权。
+func (f *Freq) boost(text string) int64 {
+	if f == nil {
+		return 0
+	}
+	return freqBoost(f.counts[text])
+}

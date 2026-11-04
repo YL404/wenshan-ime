@@ -144,18 +144,19 @@ func lookupScore(weight uint32, codeLen, bufLen int) int64 {
 //   - 编码以缓冲开头的词（还没打完，例如 nih 时的「你好」）；
 //   - 前半段已经打完的词（例如打 nihk 时仍列出「你」，选中就只上屏「你」）。
 //
-// 合并在结果上按权重排序，编码刚好用完整个缓冲的词加权。
-func (d *Dict) Lookup(buf []byte, limit int) []Candidate {
+// 合并在结果上按权重排序，编码刚好用完整个缓冲的词加权。用户词频 f 在
+// 截取前 limit 个之前就计入分数，常用词不会因为词库权重低被截掉；f 可以为 nil。
+func (d *Dict) Lookup(buf []byte, limit int, f *Freq) []Candidate {
 	if len(buf) < 2 || limit <= 0 || d.n == 0 {
 		return nil
 	}
 	best := make([]Candidate, 0, limit)
 	// 已打完的更短词：只需在等长段里找，代价很小。
 	for l := 2; l < len(buf); l += 2 {
-		best = d.exactInto(best, buf[:l], len(buf), limit)
+		best = d.exactInto(best, buf[:l], len(buf), limit, f)
 	}
 	// 整个缓冲：前缀匹配，含还没打完的长词。
-	best = d.prefixInto(best, buf, limit)
+	best = d.prefixInto(best, buf, limit, f)
 	if len(best) == 0 {
 		return nil
 	}
@@ -163,7 +164,7 @@ func (d *Dict) Lookup(buf []byte, limit int) []Candidate {
 }
 
 // prefixInto 把编码以 prefix 开头的条目合进 best。
-func (d *Dict) prefixInto(best []Candidate, prefix []byte, limit int) []Candidate {
+func (d *Dict) prefixInto(best []Candidate, prefix []byte, limit int, f *Freq) []Candidate {
 	scanned := 0
 	for i := d.lowerBound(prefix); i < d.n && scanned < maxScan; i++ {
 		code := d.code(i)
@@ -171,26 +172,28 @@ func (d *Dict) prefixInto(best []Candidate, prefix []byte, limit int) []Candidat
 			break
 		}
 		scanned++
+		text := string(d.text(i))
 		best = insertCandidate(best, Candidate{
-			Text:    string(d.text(i)),
+			Text:    text,
 			CodeLen: len(code),
-			score:   lookupScore(d.weight(i), len(code), len(prefix)),
+			score:   lookupScore(d.weight(i), len(code), len(prefix)) + f.boost(text),
 		}, limit)
 	}
 	return best
 }
 
 // exactInto 把编码恰好等于 code 的条目合进 best。
-func (d *Dict) exactInto(best []Candidate, code []byte, bufLen, limit int) []Candidate {
+func (d *Dict) exactInto(best []Candidate, code []byte, bufLen, limit int, f *Freq) []Candidate {
 	for i := d.lowerBound(code); i < d.n; i++ {
 		c := d.code(i)
 		if len(c) != len(code) || !bytes.Equal(c, code) {
 			break
 		}
+		text := string(d.text(i))
 		best = insertCandidate(best, Candidate{
-			Text:    string(d.text(i)),
+			Text:    text,
 			CodeLen: len(code),
-			score:   lookupScore(d.weight(i), len(code), bufLen),
+			score:   lookupScore(d.weight(i), len(code), bufLen) + f.boost(text),
 		}, limit)
 	}
 	return best
@@ -206,7 +209,7 @@ const (
 )
 
 // Short 返回某个字母开头的最高频词，用于单键输入（比如 l 打「了」）。
-func (d *Dict) Short(letter byte) []Candidate {
+func (d *Dict) Short(letter byte, f *Freq) []Candidate {
 	var out []Candidate
 	base := d.n * recordSize
 	for i := 0; i < d.short; i++ {
@@ -218,10 +221,11 @@ func (d *Dict) Short(letter byte) []Candidate {
 		}
 		textOff := binary.LittleEndian.Uint32(r[4:8])
 		textLen := int(r[13])
+		text := string(d.blob[textOff : textOff+uint32(textLen)])
 		out = append(out, Candidate{
-			Text:    string(d.blob[textOff : textOff+uint32(textLen)]),
+			Text:    text,
 			CodeLen: codeLen,
-			score:   candidateScore(binary.LittleEndian.Uint32(r[8:12]), codeLen, 1),
+			score:   candidateScore(binary.LittleEndian.Uint32(r[8:12]), codeLen, 1) + f.boost(text),
 		})
 	}
 	return out
@@ -278,7 +282,7 @@ func (d *Dict) exactAlts(code []byte, n int) []altText {
 // 末尾多出一个声母键时（缓冲奇数长），把它当作可延展的半个音节：枚举 26 个
 // 韵母键补全最后一个音节，让词格按词频竞争出「我发现 + zh → 我发现这」。
 // 未输入的韵母不算进编码，候选仍然只消耗实际打过的键。
-func (d *Dict) Compose(buf []byte, limit int) []Candidate {
+func (d *Dict) Compose(buf []byte, limit int, f *Freq) []Candidate {
 	if len(buf) < 4 || d.n == 0 || limit <= 0 {
 		return nil
 	}
@@ -385,10 +389,11 @@ func (d *Dict) Compose(buf []byte, limit int) []Candidate {
 		}
 		// 折算回「单个词」的权重量级，方便和词典里的词一起排序。
 		w := math.Exp(sum-segmentPenalty*float64(len(ends))+segmentPenalty) - 1
+		text := b.String()
 		out = insertCandidate(out, Candidate{
-			Text:    b.String(),
+			Text:    text,
 			CodeLen: len(buf),
-			score:   candidateScore(clampWeight(w), len(buf), len(buf)),
+			score:   candidateScore(clampWeight(w), len(buf), len(buf)) + f.boost(text),
 		}, limit)
 	}
 	emit(-1, altText{})
