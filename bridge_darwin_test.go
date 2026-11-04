@@ -1,6 +1,7 @@
 package main
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/ebitengine/purego"
@@ -63,6 +64,13 @@ func TestObjCBridge(t *testing.T) {
 	}
 
 	// 真客户端：charBefore 走 selectedRange + attributedSubstringFromRange:。
+	// NSTextView 改选区会建输入法光标窗，NSWindow 只能在主线程创建，
+	// 测试 goroutine 不一定在主线程上，和其他窗口测试一样带守卫。
+	runtime.LockOSThread()
+	if send(objc.ID(objc.GetClass("NSThread")), objc.RegisterName("isMainThread")) == 0 {
+		t.Log("不在主线程，跳过 NSTextView 部分")
+		return
+	}
 	view := send(send(objc.ID(objc.GetClass("NSTextView")), selAlloc),
 		objc.RegisterName("initWithFrame:"), NSRect{W: 300, H: 100})
 	if view == 0 {
