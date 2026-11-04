@@ -122,14 +122,6 @@ func LastError() string {
 	return lastErr
 }
 
-// Close 保存用户数据并释放映射。
-func Close() {
-	mu.Lock()
-	defer mu.Unlock()
-	flushLocked()
-	closeLocked()
-}
-
 // Flush 把攒够次数的词频和自造词写盘。扩展退出前调用。
 func Flush() {
 	mu.Lock()
@@ -262,26 +254,6 @@ func Backspace() *Outcome {
 	return outcomeLocked(sess.Backspace())
 }
 
-// Escape 取消临时英文或当前组合。
-func Escape() *Outcome {
-	mu.Lock()
-	defer mu.Unlock()
-	if sess == nil {
-		return nil
-	}
-	return outcomeLocked(sess.Escape())
-}
-
-// Page 翻页，delta 为 +1/-1；返回翻页后的候选。
-func Page(delta int) *Outcome {
-	mu.Lock()
-	defer mu.Unlock()
-	if sess == nil {
-		return nil
-	}
-	return outcomeLocked(sess.Page(delta))
-}
-
 // Select 选中第 i 个候选并上屏，返回要插入的文本。
 func Select(i int) *Outcome {
 	mu.Lock()
@@ -341,16 +313,6 @@ func Direct(text string) *Outcome {
 	return outcomeLocked(sess.Direct(text))
 }
 
-// Passthrough 处理交给应用的按键，只更新自动补空格的状态。
-func Passthrough(ch string) *Outcome {
-	mu.Lock()
-	defer mu.Unlock()
-	if sess == nil {
-		return nil
-	}
-	return outcomeLocked(sess.Passthrough(firstByte(ch)))
-}
-
 // ToggleMode 切换中英模式。
 func ToggleMode() *Outcome {
 	mu.Lock()
@@ -380,23 +342,6 @@ func Reset() {
 	}
 }
 
-// Finish 把未完成的输入上屏并清干净。
-func Finish() *Outcome {
-	mu.Lock()
-	defer mu.Unlock()
-	if sess == nil {
-		return nil
-	}
-	return outcomeLocked(sess.Finish())
-}
-
-// Candidates 返回当前页候选文本。
-func Candidates() string {
-	mu.Lock()
-	defer mu.Unlock()
-	return candidatesLocked()
-}
-
 // AllCandidates 返回全部候选文本，供键盘展开显示。
 func AllCandidates() string {
 	mu.Lock()
@@ -405,16 +350,6 @@ func AllCandidates() string {
 		return ""
 	}
 	return candidatesText(sess.AllCandidates())
-}
-
-// Preedit 返回当前预编辑串（临时英文或拼音缓冲）。
-func Preedit() string {
-	mu.Lock()
-	defer mu.Unlock()
-	if sess == nil {
-		return ""
-	}
-	return sess.Preedit()
 }
 
 // Mode 返回当前模式：0 中文，1 英文。

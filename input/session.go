@@ -58,9 +58,6 @@ func New(eng *engine.Engine) *Session {
 	return &Session{eng: eng, fullWidth: true}
 }
 
-// Engine 返回底层引擎，供启动时挂词频、自造词和短语。
-func (s *Session) Engine() *engine.Engine { return s.eng }
-
 func (s *Session) Mode() Mode      { return s.mode }
 func (s *Session) FullWidth() bool { return s.fullWidth }
 func (s *Session) Inline() string  { return s.inline }
@@ -351,16 +348,6 @@ func (s *Session) CommitInline(trailingSpace bool) Result {
 		return s.result("", false)
 	}
 	return s.result(s.commitInline(trailingSpace), true)
-}
-
-// CancelInline 放弃临时英文。
-func (s *Session) CancelInline() Result {
-	if s.inline == "" {
-		return s.result("", false)
-	}
-	s.inline = ""
-	s.inlineSp = false
-	return s.result("", true)
 }
 
 // Finish 把未完成的输入上屏并清干净，用于停用输入法或应用主动结束输入。

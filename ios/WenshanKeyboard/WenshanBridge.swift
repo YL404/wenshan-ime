@@ -60,11 +60,6 @@ enum WenshanBridge {
         MobileFlush()
     }
 
-    /// 释放引擎和词表映射。
-    static func close() {
-        MobileClose()
-    }
-
     static func type(_ keys: String) -> BridgeOutcome {
         syncContext()
         return map(MobileType(keys))
@@ -87,10 +82,6 @@ enum WenshanBridge {
 
     static func backspace() -> BridgeOutcome {
         map(MobileBackspace())
-    }
-
-    static func escape() -> BridgeOutcome {
-        map(MobileEscape())
     }
 
     static func select(_ index: Int) -> BridgeOutcome {
@@ -122,11 +113,6 @@ enum WenshanBridge {
         return map(MobileDirect(text))
     }
 
-    static func passthrough(_ ch: String) -> BridgeOutcome {
-        syncContext()
-        return map(MobilePassthrough(ch))
-    }
-
     static func toggleMode() -> BridgeOutcome {
         syncContext()
         return map(MobileToggleMode())
@@ -138,18 +124,6 @@ enum WenshanBridge {
 
     static func reset() {
         MobileReset()
-    }
-
-    static func finish() -> BridgeOutcome {
-        map(MobileFinish())
-    }
-
-    static func preedit() -> String {
-        MobilePreedit()
-    }
-
-    static func candidates() -> [String] {
-        parseCandidates(MobileCandidates())
     }
 
     static func mode() -> Int {
