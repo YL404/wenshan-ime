@@ -118,18 +118,12 @@ func (s *Session) SelectGlobal(i int) (string, bool) {
 	return s.eng.SelectGlobal(i)
 }
 
-func (s *Session) SaveFreq() error {
+// Save 把用户词频和自造词写盘，force 的含义见 engine.Engine.Save。
+func (s *Session) Save(force bool) error {
 	if s == nil || s.eng == nil {
 		return nil
 	}
-	return s.eng.SaveFreq()
-}
-
-func (s *Session) SaveUser() error {
-	if s == nil || s.eng == nil {
-		return nil
-	}
-	return s.eng.SaveUser()
+	return s.eng.Save(force)
 }
 
 func (s *Session) result(text string, consumed bool) Result {

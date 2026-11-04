@@ -701,6 +701,31 @@ func TestFreqRanking(t *testing.T) {
 	}
 }
 
+// 词频平时攒够次数才写盘，强制保存时有一次改动也要写，不能丢零头。
+func TestSaveForce(t *testing.T) {
+	d := buildDict(t, []Entry{{Code: "ni", Text: "你", Weight: 5000}})
+	path := filepath.Join(t.TempDir(), "freq.tsv")
+	e := New(d)
+	e.SetFreq(LoadFreq(path))
+	e.Type('n')
+	e.Type('i')
+	if _, ok := e.Select(0); !ok {
+		t.Fatal("选不到 你")
+	}
+	if err := e.Save(false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("没攒够次数就写盘了: %v", err)
+	}
+	if err := e.Save(true); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadFreq(path).Count("你"); got != 1 {
+		t.Fatalf("强制保存后 你 = %d, 期望 1", got)
+	}
+}
+
 // 连续单字选词后应该记住这个词，下次输入直接出现。
 func TestUserDictLearn(t *testing.T) {
 	d := buildDict(t, []Entry{

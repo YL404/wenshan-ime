@@ -47,15 +47,17 @@ func LoadFreq(path string) *Freq {
 // Count 返回某个词被选过多少次。
 func (f *Freq) Count(text string) uint32 { return f.counts[text] }
 
-// Bump 记一次选词，返回是否到了该落盘的时候。
-func (f *Freq) Bump(text string) bool {
+// Bump 记一次选词。
+func (f *Freq) Bump(text string) {
 	if f == nil || text == "" {
-		return false
+		return
 	}
 	f.counts[text]++
 	f.dirty++
-	return f.dirty >= saveEvery
 }
+
+// due 报告未落盘的选词是否攒够了 saveEvery 次。
+func (f *Freq) due() bool { return f != nil && f.dirty >= saveEvery }
 
 // Save 把词频写回磁盘。先写临时文件再改名，避免写一半留下坏文件。
 func (f *Freq) Save() error {

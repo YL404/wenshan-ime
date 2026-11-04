@@ -1,6 +1,9 @@
 package engine
 
-import "slices"
+import (
+	"errors"
+	"slices"
+)
 
 // maxBuf 是输入缓冲的上限（字节，双拼每音节两字节）。
 const maxBuf = 32
@@ -35,11 +38,9 @@ type Engine struct {
 	page      int
 
 	// 自造词的学习状态：本次组合输入过的全部按键、连续单字选出来的文字。
-	session      []byte
-	picked       []byte
-	singles      int
-	needSave     bool
-	needSaveUser bool
+	session []byte
+	picked  []byte
+	singles int
 }
 
 // New 建立引擎。dict 可以为 nil，此时只做缓冲管理（用于纯按键测试）。
@@ -56,28 +57,15 @@ func (e *Engine) SetUserDict(u *UserDict) { e.user = u }
 // SetPhrases 挂上只读的自定义短语表。它和自造词共用格式，但不会被写回。
 func (e *Engine) SetPhrases(p *UserDict) { e.phrases = p }
 
-// SaveUser 把新学的自造词写回磁盘。
-func (e *Engine) SaveUser() error {
-	if e.user == nil || !e.needSaveUser {
-		return nil
+// Save 把用户词频和自造词写回磁盘。自造词有改动就写；词频写一次要重写
+// 整个文件，force 为 false 时攒够 saveEvery 次才写，适合每次按键后调用；
+// force 为 true 时只要有改动就写，用于停用输入法或扩展退出前，不丢零头。
+func (e *Engine) Save(force bool) error {
+	var freqErr error
+	if force || e.freq.due() {
+		freqErr = e.freq.Save()
 	}
-	if err := e.user.Save(); err != nil {
-		return err
-	}
-	e.needSaveUser = false
-	return nil
-}
-
-// SaveFreq 在攒够次数后把词频写回磁盘。
-func (e *Engine) SaveFreq() error {
-	if e.freq == nil || !e.needSave {
-		return nil
-	}
-	if err := e.freq.Save(); err != nil {
-		return err
-	}
-	e.needSave = false
-	return nil
+	return errors.Join(freqErr, e.user.Save())
 }
 
 // Buffer 返回当前的按键缓冲。
@@ -168,9 +156,7 @@ func (e *Engine) selectCandidate(i int, pick func(string) string) (string, bool)
 	if used > len(e.buf) {
 		used = len(e.buf)
 	}
-	if e.freq != nil && e.freq.Bump(text) {
-		e.needSave = true
-	}
+	e.freq.Bump(text)
 	// 连续单字选词说明词库里没有这个词，组合结束后记成自造词。
 	if c.CodeLen == 2 {
 		e.singles++
@@ -181,9 +167,7 @@ func (e *Engine) selectCandidate(i int, pick func(string) string) (string, bool)
 	e.buf = append(e.buf[:0], e.buf[used:]...)
 	if len(e.buf) == 0 {
 		if e.singles >= 2 && len(e.session) >= 4 {
-			if e.user.Add(string(e.session), string(e.picked)) {
-				e.needSaveUser = true
-			}
+			e.user.Add(string(e.session), string(e.picked))
 		}
 		e.session, e.picked, e.singles = e.session[:0], e.picked[:0], 0
 	}

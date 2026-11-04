@@ -348,13 +348,10 @@ func finishInput(client objc.ID) {
 	saveLearning()
 }
 
-// saveLearning 把词频和自造词落盘（各自攒够次数才真正写）。
+// saveLearning 在输入结束时把词频和自造词落盘，有改动就写，进程被杀也不丢零头。
 func saveLearning() {
-	if err := sess.SaveFreq(); err != nil {
-		logf("保存词频失败: %v", err)
-	}
-	if err := sess.SaveUser(); err != nil {
-		logf("保存自造词失败: %v", err)
+	if err := sess.Save(true); err != nil {
+		logf("保存词频或自造词失败: %v", err)
 	}
 }
 

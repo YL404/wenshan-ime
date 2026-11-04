@@ -47,7 +47,7 @@ func Open(dictPath, dataDir string) bool {
 	mu.Lock()
 	defer mu.Unlock()
 
-	flushLocked()
+	saveLocked(true)
 	closeLocked()
 	lastErr = ""
 
@@ -122,21 +122,19 @@ func LastError() string {
 	return lastErr
 }
 
-// Flush 把攒够次数的词频和自造词写盘。扩展退出前调用。
+// Flush 把词频和自造词里所有未落盘的改动写盘。扩展退出前调用。
 func Flush() {
 	mu.Lock()
 	defer mu.Unlock()
-	flushLocked()
+	saveLocked(true)
 }
 
-func flushLocked() {
+// saveLocked 写盘；force 为 false 时词频攒够次数才写，见 engine.Engine.Save。
+func saveLocked(force bool) {
 	if sess == nil {
 		return
 	}
-	if err := sess.SaveFreq(); err != nil {
-		lastErr = err.Error()
-	}
-	if err := sess.SaveUser(); err != nil {
+	if err := sess.Save(force); err != nil {
 		lastErr = err.Error()
 	}
 }
@@ -169,7 +167,7 @@ func outcomeLocked(r input.Result) *Outcome {
 	if sess == nil {
 		return nil
 	}
-	flushLocked()
+	saveLocked(false)
 	return &Outcome{
 		Text:       r.Text,
 		Preedit:    sess.Preedit(),
