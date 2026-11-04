@@ -1,5 +1,18 @@
 import UIKit
 
+/// 顶栏右端的「收起键盘」按钮，空闲工具栏和候选条各一个。
+@MainActor
+private func configureDismissButton(_ button: UIButton, action: @escaping () -> Void) {
+    let image = UIImage(
+        systemName: "chevron.down",
+        withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium))
+    button.setImage(image, for: .normal)
+    button.tintColor = .secondaryLabel
+    button.accessibilityLabel = "收起键盘"
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.addAction(UIAction { _ in action() }, for: .touchUpInside)
+}
+
 /// 空闲时占住顶栏：左侧品牌和状态，右侧全半角与收起。
 /// 输入开始后同一块位置换成 CandidateBar，高度不变，按键不跳。
 final class ToolbarBar: UIView {
@@ -41,17 +54,8 @@ final class ToolbarBar: UIView {
             self?.onToggleFullWidth?()
         }, for: .touchUpInside)
 
-        let dismissImage = UIImage(
-            systemName: "chevron.down",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-        dismissButton.setImage(dismissImage, for: .normal)
-        dismissButton.tintColor = .secondaryLabel
         dismissButton.accessibilityIdentifier = "toolbar_dismiss"
-        dismissButton.accessibilityLabel = "收起键盘"
-        dismissButton.translatesAutoresizingMaskIntoConstraints = false
-        dismissButton.addAction(UIAction { [weak self] _ in
-            self?.onDismiss?()
-        }, for: .touchUpInside)
+        configureDismissButton(dismissButton) { [weak self] in self?.onDismiss?() }
 
         addSubview(brandLabel)
         addSubview(statusLabel)
@@ -115,7 +119,6 @@ final class CandidateBar: UIView {
     private let dismissButton = UIButton(type: .system)
     private let emptyLabel = UILabel()
     private var candidates: [String] = []
-    private var expanded = false
     var font = UIFont.systemFont(ofSize: 20)
 
     override init(frame: CGRect) {
@@ -165,17 +168,8 @@ final class CandidateBar: UIView {
             self?.onExpand?()
         }, for: .touchUpInside)
 
-        let dismissImage = UIImage(
-            systemName: "chevron.down",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-        dismissButton.setImage(dismissImage, for: .normal)
-        dismissButton.tintColor = .secondaryLabel
         dismissButton.accessibilityIdentifier = "key_dismiss"
-        dismissButton.accessibilityLabel = "收起键盘"
-        dismissButton.translatesAutoresizingMaskIntoConstraints = false
-        dismissButton.addAction(UIAction { [weak self] _ in
-            self?.onDismiss?()
-        }, for: .touchUpInside)
+        configureDismissButton(dismissButton) { [weak self] in self?.onDismiss?() }
 
         addSubview(collectionView)
         addSubview(emptyLabel)
@@ -232,7 +226,6 @@ final class CandidateBar: UIView {
     }
 
     func setExpanded(_ expanded: Bool) {
-        self.expanded = expanded
         let name = expanded ? "xmark" : "square.grid.2x2"
         expandButton.setImage(
             UIImage(
@@ -295,7 +288,7 @@ extension CandidateBar: UICollectionViewDataSource, UICollectionViewDelegateFlow
     }
 }
 
-final class CandidateCell: UICollectionViewCell {
+final class CandidateCell: PressableCell {
     static let reuseID = "candidate"
 
     private let label = UILabel()
@@ -323,19 +316,6 @@ final class CandidateCell: UICollectionViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override var isHighlighted: Bool {
-        didSet {
-            UIView.animate(withDuration: 0.1) {
-                self.contentView.alpha = self.isHighlighted ? 0.6 : 1
-            }
-        }
-    }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        contentView.alpha = 1
-    }
-
     func configure(text: String, index: Int, font: UIFont, isFirst: Bool) {
         label.text = text
         label.font = isFirst ? .systemFont(ofSize: font.pointSize, weight: .semibold) : font
@@ -351,168 +331,40 @@ final class CandidateCell: UICollectionViewCell {
 
 /// 展开后的全部候选：盖住键区，顶栏保留。网格按宽自动分列，整份候选一次滚动看完。
 final class CandidatePanel: UIView {
-    var onSelect: ((Int) -> Void)?
+    var onSelect: ((Int) -> Void)? {
+        get { grid.onSelect }
+        set { grid.onSelect = newValue }
+    }
 
-    private let collectionView: UICollectionView
-    private let layout = UICollectionViewFlowLayout()
-    private var candidates: [String] = []
-    private var laidOutWidth: CGFloat = 0
+    private let grid = TextGridView(minColumns: 3, gridIdentifier: "candidate_panel_grid")
 
     override init(frame: CGRect) {
-        layout.scrollDirection = .vertical
-        layout.minimumInteritemSpacing = 6
-        layout.minimumLineSpacing = 6
-        layout.sectionInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
-        collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: frame)
-
         translatesAutoresizingMaskIntoConstraints = false
         accessibilityIdentifier = "candidate_panel"
         backgroundColor = KeyboardPalette.functionKey
 
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.backgroundColor = .clear
-        collectionView.alwaysBounceVertical = true
-        collectionView.showsVerticalScrollIndicator = true
-        if #available(iOS 26.0, *) {
-            collectionView.topEdgeEffect.isHidden = true
-            collectionView.bottomEdgeEffect.isHidden = true
+        grid.style = { index, _ in
+            TextGridView.Style(
+                font: .systemFont(ofSize: 17, weight: index == 0 ? .semibold : .regular),
+                inset: 6,
+                accessibilityIdentifier: "candidate_panel_\(index)",
+                accessibilityValue: index == 0 ? "首选" : nil)
         }
-        collectionView.register(
-            CandidateGridCell.self,
-            forCellWithReuseIdentifier: CandidateGridCell.reuseID)
-        collectionView.dataSource = self
-        collectionView.delegate = self
-        collectionView.accessibilityIdentifier = "candidate_panel_grid"
-        addSubview(collectionView)
-
+        addSubview(grid)
         NSLayoutConstraint.activate([
-            collectionView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            collectionView.topAnchor.constraint(equalTo: topAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            grid.leadingAnchor.constraint(equalTo: leadingAnchor),
+            grid.trailingAnchor.constraint(equalTo: trailingAnchor),
+            grid.topAnchor.constraint(equalTo: topAnchor),
+            grid.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        guard collectionView.bounds.width > 0 else { return }
-        if abs(collectionView.bounds.width - laidOutWidth) > 0.5 {
-            laidOutWidth = collectionView.bounds.width
-            layout.invalidateLayout()
-        }
     }
 
     func setCandidates(_ candidates: [String]) {
-        self.candidates = candidates
-        collectionView.reloadData()
-        collectionView.layoutIfNeeded()
-        if !candidates.isEmpty {
-            collectionView.setContentOffset(.zero, animated: false)
-        }
-    }
-
-    private func contentWidth() -> CGFloat {
-        max(0, collectionView.bounds.width - 16)
-    }
-
-    private func columnCount() -> Int {
-        let width = contentWidth()
-        guard width > 0 else { return 1 }
-        return max(3, Int((width + 6) / 70))
-    }
-}
-
-extension CandidatePanel: UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
-    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        candidates.count
-    }
-
-    func collectionView(
-        _ collectionView: UICollectionView,
-        cellForItemAt indexPath: IndexPath
-    ) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(
-            withReuseIdentifier: CandidateGridCell.reuseID, for: indexPath) as! CandidateGridCell
-        cell.configure(
-            text: candidates[indexPath.item],
-            index: indexPath.item,
-            isFirst: indexPath.item == 0)
-        return cell
-    }
-
-    func collectionView(
-        _ collectionView: UICollectionView,
-        layout collectionViewLayout: UICollectionViewLayout,
-        sizeForItemAt indexPath: IndexPath
-    ) -> CGSize {
-        let width = contentWidth()
-        let columns = CGFloat(columnCount())
-        guard width > 0, columns > 0 else { return CGSize(width: 64, height: 44) }
-        let cellWidth = floor((width - 6 * (columns - 1)) / columns)
-        return CGSize(width: max(44, cellWidth), height: 44)
-    }
-
-    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        onSelect?(indexPath.item)
-    }
-}
-
-final class CandidateGridCell: UICollectionViewCell {
-    static let reuseID = "candidate_grid"
-
-    private let label = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        contentView.backgroundColor = KeyboardPalette.key
-        contentView.layer.cornerRadius = 8
-        contentView.layer.cornerCurve = .continuous
-        contentView.clipsToBounds = true
-
-        label.font = .systemFont(ofSize: 17)
-        label.textColor = .label
-        label.textAlignment = .center
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
-            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
-            label.topAnchor.constraint(equalTo: contentView.topAnchor),
-            label.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var isHighlighted: Bool {
-        didSet {
-            UIView.animate(withDuration: 0.1) {
-                self.contentView.alpha = self.isHighlighted ? 0.6 : 1
-            }
-        }
-    }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        contentView.alpha = 1
-    }
-
-    func configure(text: String, index: Int, isFirst: Bool) {
-        label.text = text
-        label.font = isFirst
-            ? .systemFont(ofSize: 17, weight: .semibold)
-            : .systemFont(ofSize: 17)
-        accessibilityIdentifier = "candidate_panel_\(index)"
-        accessibilityLabel = text
-        accessibilityValue = isFirst ? "首选" : nil
-        isAccessibilityElement = true
+        grid.setItems(candidates)
     }
 }
