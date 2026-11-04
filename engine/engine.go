@@ -29,8 +29,8 @@ type Engine struct {
 	// 接在末尾。翻页只是对它的窗口切片，首页和后续页不再各算一份，边界
 	// 因此是连续的。只算到「当前需要的页数」，热路径不构建整个候选池。
 	stream    []Candidate
-	limit     int  // 当前 stream 正常段计算时用的上限
-	exhausted bool // 正常段是否已到词库的底
+	limit     int         // 当前 stream 正常段计算时用的上限
+	exhausted bool        // 正常段是否已到词库的底
 	cands     []Candidate // 当前页 = stream 的切片
 	page      int
 
