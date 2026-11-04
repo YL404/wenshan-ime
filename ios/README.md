@@ -20,13 +20,15 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
 
 - `mobile/`：gomobile 导出的 Go 引擎入口。
   - `Open(dictPath, dataDir)`：映射词表，并从 `dataDir` 加载 `freq.tsv`、`userdict.tsv`、`phrases.tsv`。
-  - `Flush()` / `Close()`：把攒够次数的词频和自造词写盘。
+  - 每个按键动作一个导出函数，返回 `Outcome`（上屏文本、预编辑、当前页候选、模式）；`Current()` 只取状态。
+  - `Flush()`：把所有未落盘的词频和自造词写盘，键盘收起时调用；平时每次按键只在词频攒够 50 次时写。
 - `Shared/AppGroup.swift`：App Group 标识和共享目录路径。
 - `WenshanHost/`：宿主 App。
   - `DictDeployer.swift`：把扩展 Bundle 里的 `dict.bin` 原子部署到 App Group。
   - `ContentView.swift`：启用说明、词表状态、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
-  - `WenshanBridge.swift`：gomobile 桥的 Swift 门面。
+  - `WenshanBridge.swift`：gomobile 桥的 Swift 门面，唯一接触 gomobile 类型的地方；主线程隔离，
+    光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
   - `KeyboardModel.swift`：Swift 侧只保留 Shift 状态和宿主上下文；拼音组合、
     标点、中英模式、临时英文、空格/回车/退格和自动补空格在根目录 `input/`。
   - `KeyboardComponents.swift`：尺寸和按键；`CandidateViews.swift`：空闲工具栏、候选条、全量候选网格；`SymbolPanelView.swift`：分类符号面板；iOS 26 关闭候选条与网格的 scroll edge effect，否则文字会被边缘模糊盖住。

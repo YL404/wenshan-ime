@@ -43,7 +43,7 @@ final class KeyboardViewController: UIInputViewController {
         super.viewDidLoad()
         keyboardLog.info("viewDidLoad")
         // 规则层判断中英文之间要不要补空格，读的是宿主正文里光标前的字符。
-        WenshanBridge.contextBefore = { [weak self] in
+        model.contextBefore = { [weak self] in
             self?.textDocumentProxy.documentContextBeforeInput ?? ""
         }
         buildUI()

@@ -46,3 +46,36 @@ func TestContextStripsPreedit(t *testing.T) {
 		t.Fatalf("中文后空格上屏 = %q, 期望不补空格", got)
 	}
 }
+
+// Flush 要把不足攒够次数的词频也写盘，扩展被回收前不丢学习记录。
+func TestFlushWritesPendingFreq(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dict.bin")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.WriteDict(f, []engine.Entry{{Code: "ni", Text: "你", Weight: 2500}}); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	data := t.TempDir()
+	if !Open(path, data) {
+		t.Fatalf("Open 失败: %s", LastError())
+	}
+	t.Cleanup(func() {
+		mu.Lock()
+		closeLocked()
+		mu.Unlock()
+	})
+	Type("n")
+	Type("i")
+	if got := Space().Text; got != "你" {
+		t.Fatalf("空格上屏 = %q", got)
+	}
+	if msg := Flush(); msg != "" {
+		t.Fatalf("Flush 失败: %s", msg)
+	}
+	if got := engine.LoadFreq(filepath.Join(data, "freq.tsv")).Count("你"); got != 1 {
+		t.Fatalf("Flush 后词频 = %d, 期望 1", got)
+	}
+}
