@@ -2,15 +2,21 @@ package engine
 
 import (
 	"bufio"
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 // saveEvery 是攒够多少次选词才落盘。写在按键路径上，所以频率要低。
 const saveEvery = 50
+
+// maxFreqEntries 是词频表最多保留的词数。超出时写盘前淘汰选得最少的词，
+// 文件和内存不会随使用时间无限增长。
+const maxFreqEntries = 20000
 
 // Freq 记录用户实际选过的词，用来把常用的词往前排。
 // 只在主线程访问，不加锁。
@@ -59,7 +65,8 @@ func (f *Freq) Bump(text string) {
 // due 报告未落盘的选词是否攒够了 saveEvery 次。
 func (f *Freq) due() bool { return f != nil && f.dirty >= saveEvery }
 
-// Save 把词频写回磁盘。先写临时文件再改名，避免写一半留下坏文件。
+// Save 把词频写回磁盘，按次数从多到少排列，超过 maxFreqEntries 的部分
+// 淘汰掉。先写临时文件再改名，避免写一半留下坏文件。
 func (f *Freq) Save() error {
 	if f == nil || f.dirty == 0 {
 		return nil
@@ -67,14 +74,30 @@ func (f *Freq) Save() error {
 	if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
 		return err
 	}
+	texts := make([]string, 0, len(f.counts))
+	for text := range f.counts {
+		texts = append(texts, text)
+	}
+	slices.SortFunc(texts, func(a, b string) int {
+		if c := cmp.Compare(f.counts[b], f.counts[a]); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+	if len(texts) > maxFreqEntries {
+		for _, text := range texts[maxFreqEntries:] {
+			delete(f.counts, text)
+		}
+		texts = texts[:maxFreqEntries]
+	}
 	tmp := f.path + ".tmp"
 	w, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
 	bw := bufio.NewWriter(w)
-	for text, n := range f.counts {
-		if _, err := fmt.Fprintf(bw, "%s\t%d\n", text, n); err != nil {
+	for _, text := range texts {
+		if _, err := fmt.Fprintf(bw, "%s\t%d\n", text, f.counts[text]); err != nil {
 			w.Close()
 			return err
 		}

@@ -782,6 +782,35 @@ func TestSaveForce(t *testing.T) {
 	}
 }
 
+// 词频表超过上限时淘汰选得最少的词，写出的文件按次数从多到少排列。
+func TestFreqCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "freq.tsv")
+	f := LoadFreq(path)
+	for i := range maxFreqEntries + 5 {
+		f.counts["w"+strconv.Itoa(i)] = 2
+	}
+	f.counts["常用"] = 9
+	f.counts["少用"] = 1
+	f.dirty = 1
+	if err := f.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadFreq(path)
+	if len(got.counts) != maxFreqEntries {
+		t.Fatalf("保留 %d 条, 期望 %d", len(got.counts), maxFreqEntries)
+	}
+	if got.Count("常用") != 9 || got.Count("少用") != 0 {
+		t.Fatalf("常用 = %d, 少用 = %d", got.Count("常用"), got.Count("少用"))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(data, []byte("常用\t9\n")) {
+		t.Fatalf("文件没按次数排序: %q", data[:20])
+	}
+}
+
 // 连续单字选词后应该记住这个词，下次输入直接出现。
 func TestUserDictLearn(t *testing.T) {
 	d := buildDict(t, []Entry{
