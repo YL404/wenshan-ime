@@ -127,7 +127,7 @@ function run([udid, developerDir]) {
 ## 已知边界
 
 - 还没有真机内存数据；iPad/横屏高度和字号是按档位估算，未做截图校准。
-- 还没有九宫格、硬件键盘映射；触感需要完全访问。
+- 还没有硬件键盘映射；触感需要完全访问。
 - 用户数据只在本地；没有 iCloud/WebDAV 同步。`phrases.tsv` 目前需要手动放到
   App Group 的 `Data/` 下，宿主还没有短语编辑器。
 - 没有 App Group 的免费签名会退回扩展自己的 Documents，主 App 看不到学习记录。
