@@ -167,9 +167,14 @@ func (s *Session) ShiftLetter(ch byte) Result {
 	return s.result(text, true)
 }
 
-// Direct 直接插入一段固定文本（符号页、英文直通）。组合中的候选先上屏。
+// Direct 直接插入一段固定文本（iOS 的英文字母、数字键、符号页）。组合中的
+// 候选先上屏。补空格和 macOS 透传按键（Passthrough）一致：字母或数字
+// 紧跟中文时前面补空格，中文紧跟字母或数字时也补。
 func (s *Session) Direct(text string) Result {
 	out := s.commitPending()
+	if text != "" && isASCIIAlnum(text[0]) && s.classBefore(out) == classCJK {
+		out += " "
+	}
 	return s.result(s.commitText(out, text), true)
 }
 

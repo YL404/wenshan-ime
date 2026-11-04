@@ -362,3 +362,27 @@ func TestPendingRawWithoutCandidates(t *testing.T) {
 		t.Fatalf("无候选时结束输入 = %q", r.Text)
 	}
 }
+
+// iOS 用 Direct 插入英文字母和数字，补空格要和 macOS 的 Passthrough 一致。
+func TestDirectSpacingMatchesPassthrough(t *testing.T) {
+	for _, text := range []string{"a", "A", "7", "@", "，"} {
+		s, _ := withDoc(t, "你")
+		s.ToggleMode()
+		want := s.Passthrough(text[0]).Text + text
+		if text == "，" {
+			want = text
+		}
+		s, _ = withDoc(t, "你")
+		s.ToggleMode()
+		if got := s.Direct(text).Text; got != want {
+			t.Errorf("英文模式中文后 Direct(%q) = %q, 期望 %q", text, got, want)
+		}
+	}
+	// 中文模式下组合中的候选先上屏，再按候选末字补空格。
+	s := New(engine.New(testDict(t)))
+	s.Type('n')
+	s.Type('i')
+	if r := s.Direct("5"); r.Text != "你 5" {
+		t.Fatalf("候选后接数字 = %q", r.Text)
+	}
+}
