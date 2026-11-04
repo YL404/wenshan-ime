@@ -8,6 +8,7 @@ package input
 
 import (
 	"unicode"
+	"unicode/utf8"
 
 	"wenshan/engine"
 )
@@ -40,18 +41,18 @@ type Result struct {
 
 // Session 持有一次输入过程的全部规则状态。它只在主线程使用，不加锁。
 type Session struct {
-	eng       *engine.Engine
-	mode      Mode
-	fullWidth bool
-	punctAlt  [128]bool
-	before    func() (rune, bool)
-	inline    string
-	inlineSp  bool
+	eng        *engine.Engine
+	mode       Mode
+	fullWidth  bool
+	punctAlt   [128]bool
+	lookbehind func() (rune, bool)
+	inline     string
+	inlineSp   bool
 }
 
 // SetLookbehind 设置「读光标前一个字符」的钩子。平台壳用它查宿主正文，
 // 判断中英文之间要不要补空格。不设置或返回 false 时当作前面没有字符。
-func (s *Session) SetLookbehind(fn func() (rune, bool)) { s.before = fn }
+func (s *Session) SetLookbehind(fn func() (rune, bool)) { s.lookbehind = fn }
 
 // New 建立规则状态机。eng 可以为 nil，此时只做缓冲和标点规则（用于测试）。
 func New(eng *engine.Engine) *Session {
@@ -110,14 +111,6 @@ func (s *Session) AllCandidates() []engine.Candidate {
 	return s.eng.AllCandidates()
 }
 
-// SelectGlobal 选出全部候选里的第 i 个，索引可以落在后续页。
-func (s *Session) SelectGlobal(i int) (string, bool) {
-	if s == nil || s.eng == nil {
-		return "", false
-	}
-	return s.eng.SelectGlobal(i)
-}
-
 // Save 把用户词频和自造词写盘，force 的含义见 engine.Engine.Save。
 func (s *Session) Save(force bool) error {
 	if s == nil || s.eng == nil {
@@ -163,14 +156,12 @@ func (s *Session) ShiftLetter(ch byte) Result {
 	}
 	if s.Buffer() != "" {
 		s.inline = s.Buffer() + string(ch)
-		s.inlineSp = s.lastClass() == classCJK
-		if s.eng != nil {
-			s.eng.Reset()
-		}
+		s.inlineSp = s.classBefore("") == classCJK
+		s.eng.Reset()
 		return s.result("", true)
 	}
 	text := string(ch)
-	if s.lastClass() == classCJK {
+	if s.classBefore("") == classCJK {
 		text = " " + text
 	}
 	return s.result(text, true)
@@ -178,30 +169,18 @@ func (s *Session) ShiftLetter(ch byte) Result {
 
 // Direct 直接插入一段固定文本（符号页、英文直通）。组合中的候选先上屏。
 func (s *Session) Direct(text string) Result {
-	out := ""
-	if s.inline != "" {
-		out += s.commitInline(false)
-	}
-	if s.Buffer() != "" && s.eng != nil {
-		if cand, ok := s.eng.Select(0); ok {
-			out += s.commitText(cand)
-		}
-	}
-	out += s.commitText(text)
-	return s.result(out, true)
+	out := s.commitPending()
+	return s.result(s.commitText(out, text), true)
 }
 
 // Space 处理空格：临时英文结束并补空格；有候选选首选；否则原样上屏。
 // 没有任何组合时返回 Consumed=false，让平台自己插入空格。
 func (s *Session) Space() Result {
 	if s.inline != "" {
-		return s.result(s.commitInline(true), true)
+		return s.result(s.commitInline("", true), true)
 	}
-	if s.mode == Chinese && s.Buffer() != "" && s.eng != nil {
-		if cand, ok := s.eng.Select(0); ok {
-			return s.result(s.commitText(cand), true)
-		}
-		return s.result(s.commitRaw(), true)
+	if s.mode == Chinese && s.Buffer() != "" {
+		return s.result(s.commitPending(), true)
 	}
 	return s.result("", false)
 }
@@ -211,10 +190,10 @@ func (s *Session) Space() Result {
 func (s *Session) Return() Result {
 	if s.inline != "" {
 		// 回车结束不补空格，后面紧接中文也不自动加。
-		return s.result(s.commitInline(false), true)
+		return s.result(s.commitInline("", false), true)
 	}
-	if s.mode == Chinese && s.Buffer() != "" && s.eng != nil {
-		return s.result(s.commitRaw(), true)
+	if s.mode == Chinese && s.Buffer() != "" {
+		return s.result(s.commitRaw(""), true)
 	}
 	return s.result("", false)
 }
@@ -228,7 +207,7 @@ func (s *Session) Backspace() Result {
 		}
 		return s.result("", true)
 	}
-	if s.mode == Chinese && s.Buffer() != "" && s.eng != nil {
+	if s.mode == Chinese && s.Buffer() != "" {
 		s.eng.Backspace()
 		return s.result("", true)
 	}
@@ -242,7 +221,7 @@ func (s *Session) Escape() Result {
 		s.inlineSp = false
 		return s.result("", true)
 	}
-	if s.Buffer() != "" && s.eng != nil {
+	if s.Buffer() != "" {
 		s.eng.Reset()
 		return s.result("", true)
 	}
@@ -252,7 +231,7 @@ func (s *Session) Escape() Result {
 // Page 翻页。候选为空时返回 Consumed=false；到边界仍算消费，避免 = / - 上屏。
 func (s *Session) Page(delta int) Result {
 	if s.inline != "" {
-		return s.result(s.commitInline(false), false)
+		return s.result(s.commitInline("", false), false)
 	}
 	if s.eng == nil || len(s.eng.Candidates()) == 0 {
 		return s.result("", false)
@@ -266,11 +245,7 @@ func (s *Session) Select(i int) Result {
 	if s.eng == nil {
 		return s.result("", false)
 	}
-	text, ok := s.eng.Select(i)
-	if !ok {
-		return s.result("", false)
-	}
-	return s.result(s.commitText(text), true)
+	return s.selected(s.eng.Select(i))
 }
 
 // SelectChar 取第 i 个候选的首字或尾字。
@@ -278,11 +253,23 @@ func (s *Session) SelectChar(i int, last bool) Result {
 	if s.eng == nil {
 		return s.result("", false)
 	}
-	text, ok := s.eng.SelectChar(i, last)
+	return s.selected(s.eng.SelectChar(i, last))
+}
+
+// SelectGlobal 选出全部候选里的第 i 个并上屏，索引可以落在后续页。
+func (s *Session) SelectGlobal(i int) Result {
+	if s.eng == nil {
+		return s.result("", false)
+	}
+	return s.selected(s.eng.SelectGlobal(i))
+}
+
+// selected 把引擎选出的文字按补空格规则上屏。
+func (s *Session) selected(text string, ok bool) Result {
 	if !ok {
 		return s.result("", false)
 	}
-	return s.result(s.commitText(text), true)
+	return s.result(s.commitText("", text), true)
 }
 
 // Punctuate 把 ASCII 标点转成中文标点。组合中的候选先上屏；
@@ -294,36 +281,24 @@ func (s *Session) Punctuate(ch byte) Result {
 	if _, ok := punctTable[ch]; !ok {
 		return s.result("", false)
 	}
-	out := ""
-	if s.inline != "" {
-		out += s.commitInline(false)
-	}
-	if s.Buffer() != "" && s.eng != nil {
-		if cand, ok := s.eng.Select(0); ok {
-			out += s.commitText(cand)
-		}
-	}
+	out := s.commitPending()
 	punct := s.punctuate(ch)
-	if alt, ok := numberPunct(s.lastDigit(), ch); ok {
+	if alt, ok := numberPunct(s.digitBefore(out), ch); ok {
 		punct = alt
 	}
-	out += punct
-	return s.result(out, true)
+	return s.result(out+punct, true)
 }
 
 // Passthrough 处理交给应用的按键：先把组合上屏，再按光标前的字符决定
-// 要不要补空格。Text 是需要在应用处理按键前插入的空格。
+// 要不要补空格。Text 是需要在应用处理按键前插入的文本。
 func (s *Session) Passthrough(ch byte) Result {
-	out := ""
-	if s.inline != "" {
-		out += s.commitInline(false)
+	var out string
+	if ch >= 0x20 {
+		out = s.commitPending()
+	} else {
+		out = s.commitInline("", false)
 	}
-	if s.Buffer() != "" && ch >= 0x20 && s.eng != nil {
-		if cand, ok := s.eng.Select(0); ok {
-			out += s.commitText(cand)
-		}
-	}
-	if isASCIIAlnum(ch) && s.lastClass() == classCJK {
+	if isASCIIAlnum(ch) && s.classBefore(out) == classCJK {
 		out += " "
 	}
 	return s.result(out, false)
@@ -331,14 +306,9 @@ func (s *Session) Passthrough(ch byte) Result {
 
 // ToggleMode 切换中英模式。切到英文时把没上屏的拼音原样打出去。
 func (s *Session) ToggleMode() Result {
-	out := ""
-	if s.inline != "" {
-		out += s.commitInline(false)
-	}
+	out := s.commitInline("", false)
 	if s.mode == Chinese {
-		if s.Buffer() != "" {
-			out += s.commitRaw()
-		}
+		out = s.commitRaw(out)
 		s.mode = English
 	} else {
 		s.mode = Chinese
@@ -357,23 +327,13 @@ func (s *Session) CommitInline(trailingSpace bool) Result {
 	if s.inline == "" {
 		return s.result("", false)
 	}
-	return s.result(s.commitInline(trailingSpace), true)
+	return s.result(s.commitInline("", trailingSpace), true)
 }
 
 // Finish 把未完成的输入上屏并清干净，用于停用输入法或应用主动结束输入。
 func (s *Session) Finish() Result {
-	out := ""
-	if s.inline != "" {
-		out += s.commitInline(false)
-	}
-	if s.eng != nil {
-		if cand, ok := s.eng.Select(0); ok {
-			out += cand
-		}
-		s.eng.Reset()
-	}
-	s.inline = ""
-	s.inlineSp = false
+	out := s.commitPending()
+	s.Reset()
 	return s.result(out, out != "")
 }
 
@@ -386,25 +346,90 @@ func (s *Session) Reset() {
 	s.inlineSp = false
 }
 
-// lastClass 返回光标前一个字符的类别，用于判断要不要补空格。
-// 问不到宿主正文时按「前面没有字符」处理。
-func (s *Session) lastClass() class {
-	if s.before == nil {
-		return classNone
+// 下面的上屏辅助函数都接收 pending：本次动作已经拼好、还没写进宿主的
+// 文本，返回追加之后的结果。补空格和数字后半角句号要看「光标前一个字符」，
+// pending 非空时那个字符是 pending 的末尾，而不是宿主正文里的旧内容。
+
+// commitPending 结束临时英文，再把拼音缓冲的首选上屏；没有候选时把编码
+// 原样上屏，免得缓冲留在引擎里、预编辑却被后续插入的文本顶掉。
+func (s *Session) commitPending() string {
+	out := s.commitInline("", false)
+	if s.Buffer() == "" {
+		return out
 	}
-	r, ok := s.before()
+	if cand, ok := s.eng.Select(0); ok {
+		return s.commitText(out, cand)
+	}
+	return s.commitRaw(out)
+}
+
+// commitText 上屏一段文字，并在中文紧跟英文/数字时补一个空格。
+func (s *Session) commitText(pending, text string) string {
+	if text == "" {
+		return pending
+	}
+	if classOf(text) == classCJK && s.classBefore(pending) == classASCII {
+		return pending + " " + text
+	}
+	return pending + text
+}
+
+// commitRaw 把拼音缓冲原样上屏，不做任何转换。
+func (s *Session) commitRaw(pending string) string {
+	buf := s.Buffer()
+	if buf == "" {
+		return pending
+	}
+	s.eng.Reset()
+	if s.classBefore(pending) == classCJK {
+		return pending + " " + buf
+	}
+	return pending + buf
+}
+
+// commitInline 把临时英文串上屏。空格结束补一个空格；回车结束不补，
+// 方便后面直接紧跟中文（例如 iOS版、iPhone手机）。
+func (s *Session) commitInline(pending string, trailingSpace bool) string {
+	if s.inline == "" {
+		return pending
+	}
+	text := s.inline
+	if s.inlineSp {
+		text = " " + text
+	}
+	if trailingSpace {
+		text += " "
+	}
+	s.inline = ""
+	s.inlineSp = false
+	return pending + text
+}
+
+// charBefore 返回光标前一个字符：pending 非空时取它的末字，否则问宿主正文。
+// 问不到时按「前面没有字符」处理。
+func (s *Session) charBefore(pending string) (rune, bool) {
+	if pending != "" {
+		r, _ := utf8.DecodeLastRuneInString(pending)
+		return r, true
+	}
+	if s.lookbehind == nil {
+		return 0, false
+	}
+	return s.lookbehind()
+}
+
+// classBefore 返回光标前一个字符的类别，用于判断要不要补空格。
+func (s *Session) classBefore(pending string) class {
+	r, ok := s.charBefore(pending)
 	if !ok {
 		return classNone
 	}
 	return classOfRune(r)
 }
 
-// lastDigit 判断光标前一个字符是不是 ASCII 数字，用于数字后的半角句号。
-func (s *Session) lastDigit() bool {
-	if s.before == nil {
-		return false
-	}
-	r, ok := s.before()
+// digitBefore 判断光标前一个字符是不是 ASCII 数字，用于数字后的半角句号。
+func (s *Session) digitBefore(pending string) bool {
+	r, ok := s.charBefore(pending)
 	return ok && r < 0x80 && isASCIIDigit(byte(r))
 }
 
@@ -419,49 +444,6 @@ func (s *Session) punctuate(ch byte) string {
 	}
 	s.punctAlt[ch] = !s.punctAlt[ch]
 	return alts[i]
-}
-
-// commitText 上屏一段文字，并在中文紧跟英文/数字时补一个空格。
-func (s *Session) commitText(text string) string {
-	if text == "" {
-		return ""
-	}
-	out := text
-	if classOf(text) == classCJK && s.lastClass() == classASCII {
-		out = " " + out
-	}
-	return out
-}
-
-// commitRaw 把拼音缓冲原样上屏，不做任何转换。
-func (s *Session) commitRaw() string {
-	buf := s.Buffer()
-	if buf == "" {
-		return ""
-	}
-	if s.eng != nil {
-		s.eng.Reset()
-	}
-	text := buf
-	if s.lastClass() == classCJK {
-		text = " " + text
-	}
-	return text
-}
-
-// commitInline 把临时英文串上屏。空格结束补一个空格；回车结束不补，
-// 方便后面直接紧跟中文（例如 iOS版、iPhone手机）。
-func (s *Session) commitInline(trailingSpace bool) string {
-	text := s.inline
-	if s.inlineSp {
-		text = " " + text
-	}
-	if trailingSpace {
-		text += " "
-	}
-	s.inline = ""
-	s.inlineSp = false
-	return text
 }
 
 func isASCIIDigit(ch byte) bool {
@@ -479,7 +461,7 @@ func startsWithHan(s string) bool {
 	return false
 }
 
-// classOfRune 判断上屏记录里的一格属于哪一类。
+// classOfRune 判断一个字符属于哪一类。
 func classOfRune(r rune) class {
 	switch {
 	case unicode.Is(unicode.Han, r):

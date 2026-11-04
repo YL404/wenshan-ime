@@ -279,16 +279,7 @@ func SelectGlobal(i int) *Outcome {
 	if sess == nil {
 		return nil
 	}
-	text, ok := sess.SelectGlobal(i)
-	if !ok {
-		return nil
-	}
-	return outcomeLocked(input.Result{
-		Text:      text,
-		Consumed:  true,
-		Mode:      sess.Mode(),
-		FullWidth: sess.FullWidth(),
-	})
+	return outcomeLocked(sess.SelectGlobal(i))
 }
 
 // Punctuate 把 ASCII 标点转成中文标点；半角时 Consumed=false。

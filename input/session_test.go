@@ -325,3 +325,40 @@ func TestLookbehindFails(t *testing.T) {
 		t.Fatalf("查不到正文时补了空格 = %q", r.Text)
 	}
 }
+
+// 同一次按键里先上屏的候选也算「光标前的字符」：数字后打了中文再按句号，
+// 句号要跟着中文变全角；中文候选后透传的数字也要补空格。
+func TestPendingTextIsLookbehind(t *testing.T) {
+	type1 := func(s *Session, keys string) {
+		for i := 0; i < len(keys); i++ {
+			s.Type(keys[i])
+		}
+	}
+	s, _ := withDoc(t, "3")
+	type1(s, "nihk")
+	if r := s.Punctuate('.'); r.Text != " 你好。" {
+		t.Fatalf("3 + nihk + 句号 = %q", r.Text)
+	}
+	s, _ = withDoc(t, "abc")
+	type1(s, "nihk")
+	if r := s.Passthrough('0'); r.Text != " 你好 " {
+		t.Fatalf("abc + nihk + 0 = %q", r.Text)
+	}
+}
+
+// 缓冲查不到候选时，标点和停用输入法都把编码原样上屏，不留在引擎里。
+func TestPendingRawWithoutCandidates(t *testing.T) {
+	s := New(engine.New(testDict(t)))
+	s.Type('q')
+	s.Type('q')
+	s.Type('q')
+	if r := s.Punctuate(','); r.Text != "qqq，" || s.Buffer() != "" {
+		t.Fatalf("无候选时标点 = %q, 缓冲 %q", r.Text, s.Buffer())
+	}
+	s.Type('q')
+	s.Type('q')
+	s.Type('q')
+	if r := s.Finish(); r.Text != "qqq" {
+		t.Fatalf("无候选时结束输入 = %q", r.Text)
+	}
+}
