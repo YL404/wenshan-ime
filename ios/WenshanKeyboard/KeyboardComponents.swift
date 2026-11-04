@@ -85,22 +85,36 @@ enum KeyboardPalette {
 
 /// 按按下顺序执行按键动作。两指快速连打时，后按下的键可能先抬起；
 /// 队列会等前一个键抬起或取消后再执行，保证字符顺序和手指顺序一致。
+///
+/// 某个键既没抬起也没取消（UIKit 漏发事件）时，它会挡住后面所有按键。
+/// 两道兜底：队头按下超过 staleAfter 秒就让开；已经不在队列里的序号
+/// （被让开或 reset 掉）提交时直接执行，不再等。
 @MainActor
 final class KeyEventQueue {
+    private static let staleAfter: TimeInterval = 2
+
     private var nextSequence = 0
     private var order: [Int] = []
     private var pending: [Int: () -> Void] = [:]
+    private var startedAt: [Int: TimeInterval] = [:]
     private var isFlushing = false
 
     func begin() -> Int {
+        let now = ProcessInfo.processInfo.systemUptime
+        while let head = order.first, pending[head] == nil,
+              now - (startedAt[head] ?? now) > Self.staleAfter {
+            drop(head)
+        }
         let sequence = nextSequence
         nextSequence += 1
         order.append(sequence)
+        startedAt[sequence] = now
+        flush()
         return sequence
     }
 
     func commit(_ sequence: Int, action: @escaping () -> Void) {
-        guard sequence >= 0 else {
+        guard sequence >= 0, order.contains(sequence) else {
             action()
             return
         }
@@ -110,9 +124,21 @@ final class KeyEventQueue {
 
     func cancel(_ sequence: Int) {
         guard sequence >= 0 else { return }
-        pending[sequence] = nil
-        order.removeAll { $0 == sequence }
+        drop(sequence)
         flush()
+    }
+
+    /// 键盘收起时清空，旧按键之后的提交按「不在队列里」直接执行。
+    func reset() {
+        order.removeAll()
+        pending.removeAll()
+        startedAt.removeAll()
+    }
+
+    private func drop(_ sequence: Int) {
+        pending[sequence] = nil
+        startedAt[sequence] = nil
+        order.removeAll { $0 == sequence }
     }
 
     private func flush() {
@@ -120,8 +146,7 @@ final class KeyEventQueue {
         isFlushing = true
         defer { isFlushing = false }
         while let sequence = order.first, let action = pending[sequence] {
-            order.removeFirst()
-            pending[sequence] = nil
+            drop(sequence)
             action()
         }
     }
@@ -275,7 +300,8 @@ final class KeyButton: UIButton {
         let inside = touch.map {
             bounds.insetBy(dx: -10, dy: -10).contains($0.location(in: self))
         } ?? false
-        let shouldTap = inside && !didLongPress && !didRepeat
+        // cancelInteraction 之后 UIKit 仍可能补发 endTracking，那次触摸已经取消，不能再算轻点。
+        let shouldTap = touchActive && inside && !didLongPress && !didRepeat
         finishTracking()
         super.endTracking(touch, with: event)
         if shouldTap {
@@ -283,6 +309,7 @@ final class KeyButton: UIButton {
         } else {
             onCancelled?()
         }
+        eventSequence = -1
     }
 
     override func cancelTracking(with event: UIEvent?) {

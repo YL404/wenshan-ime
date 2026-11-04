@@ -73,33 +73,43 @@ final class KeyboardViewController: UIInputViewController {
         model.reset()
         clearMarkedText()
         hidePreview()
+        keyEvents.reset()
         closeCandidatePanel()
         closeSymbolPanel()
         candidateBar.setCandidates([])
     }
-    /// 外部改正文：只在组合态重置，避免每次选词都误清状态。
+
     override func textDidChange(_ textInput: UITextInput?) {
-        guard !isApplyingText else { return }
-        closeSymbolPanel()
-        guard model.isComposing else { return }
-        model.reset()
-        render()
+        // 同一 App 里换输入框只会走到这里，不会重新 viewWillAppear，
+        // 回车键的标题和高亮要跟着新输入框的 returnKeyType 走。
+        updateContext()
+        updateKeys()
+        guard !isApplyingText, !isOwnComposition() else { return }
+        handleExternalChange()
     }
 
     override func selectionWillChange(_ textInput: UITextInput?) {
-        closeSymbolPanel()
-        guard model.isComposing else { return }
-        model.reset()
-        clearMarkedText()
-        render()
+        handleExternalChange()
     }
 
     override func selectionDidChange(_ textInput: UITextInput?) {
+        handleExternalChange()
+    }
+
+    /// 宿主改了正文或光标（点到别处、粘贴、App 自己改内容）：只在组合态重置，
+    /// render 会顺带清掉 marked text。
+    private func handleExternalChange() {
         closeSymbolPanel()
         guard model.isComposing else { return }
         model.reset()
-        clearMarkedText()
         render()
+    }
+
+    /// 部分宿主会在 setMarkedText 之后异步回调 textDidChange，这时 isApplyingText
+    /// 早已复位。光标前仍以当前预编辑串结尾，说明是自己的组合，不算外部改动。
+    private func isOwnComposition() -> Bool {
+        guard model.isComposing, hasMarkedText else { return false }
+        return textDocumentProxy.documentContextBeforeInput?.hasSuffix(model.preedit) ?? false
     }
 
     override func viewWillTransition(

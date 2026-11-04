@@ -97,7 +97,11 @@ final class KeyboardModel {
             phase = .failed(error)
         } else {
             phase = .ready
-            if let current = bridge.current() {
+            // 加载期间按过「中/英」只改了 Swift 侧，先把规则层切到同一模式再同步。
+            if var current = bridge.current() {
+                if current.isEnglish != (mode == .english) {
+                    current = bridge.toggleMode()
+                }
                 _ = apply(current)
             }
         }
@@ -222,9 +226,12 @@ final class KeyboardModel {
         return apply(bridge.toggleFullWidth())
     }
 
-    /// 清空当前组合，不删除已经上屏的文本。
+    /// 清空当前组合，不删除已经上屏的文本。加载中不碰 Go 侧：Open 持锁读词表，
+    /// 主线程会一直等到加载结束。
     func reset() {
-        bridge.reset()
+        if phase == .ready {
+            bridge.reset()
+        }
         preedit = ""
         candidates = []
         shift = .off
