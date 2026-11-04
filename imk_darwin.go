@@ -108,25 +108,12 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 	// 中文态按住 Shift 打大写字母：没有缓冲时直接上屏；
 	// 正在打拼音时把已打的编码接进临时英文串，再从这字母继续。
 	if raw >= 'A' && raw <= 'Z' && mods&nsModShift != 0 {
-		res := sess.ShiftLetter(raw)
-		if res.Consumed {
-			if res.Text != "" {
-				insertText(client, res.Text)
-			}
-			applyPreedit(client)
-			return true
-		}
-		return false
+		return commit(client, sess.ShiftLetter(raw))
 	}
 	// Shift+空格：全角/半角标点切换。临时英文里仍然按空格结束。
 	if keyCode == keyCodeSpace && mods&nsModShift != 0 {
 		if sess.Inline() != "" {
-			res := sess.Space()
-			if res.Text != "" {
-				insertText(client, res.Text)
-			}
-			applyPreedit(client)
-			return true
+			return commit(client, sess.Space())
 		}
 		res := sess.ToggleFullWidth()
 		if res.FullWidth {
@@ -139,90 +126,36 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 
 	switch keyCode {
 	case keyCodeDelete:
-		res := sess.Backspace()
-		if res.Consumed {
-			applyPreedit(client)
-			return true
-		}
-		return false
+		return commit(client, sess.Backspace())
 	case keyCodeEscape:
-		res := sess.Escape()
-		if res.Consumed {
-			applyPreedit(client)
-			return true
-		}
-		return false
+		return commit(client, sess.Escape())
 	case keyCodeReturn, keyCodeKeypadEnter:
 		// 回车把缓冲里的字母原样上屏，中文状态下不用切模式就能打英文。
-		res := sess.Return()
-		if res.Consumed {
-			insertText(client, res.Text)
-			applyPreedit(client)
-			return true
-		}
-		return false
+		return commit(client, sess.Return())
 	case keyCodeSpace:
-		res := sess.Space()
-		if res.Consumed {
-			insertText(client, res.Text)
-			applyPreedit(client)
-			return true
-		}
-		return false
+		return commit(client, sess.Space())
 	case keyCodeTab:
 		// 临时英文里 Tab 先结束英文，再交给应用切换焦点，不补空格。
 		if sess.Inline() != "" {
-			res := sess.CommitInline(false)
-			if res.Text != "" {
-				insertText(client, res.Text)
-				applyPreedit(client)
-			}
+			commit(client, sess.CommitInline(false))
 			return false
 		}
-		res := sess.Space()
-		if res.Consumed {
-			insertText(client, res.Text)
-			applyPreedit(client)
-			return true
-		}
-		return false
+		return commit(client, sess.Space())
 	case keyCodePageUp:
-		res := sess.Page(-1)
-		if res.Text != "" {
-			insertText(client, res.Text)
-			applyPreedit(client)
-		}
-		if res.Consumed {
-			showCandidates(client)
-			return true
-		}
-		return false
+		return page(client, -1)
 	case keyCodePageDown:
-		res := sess.Page(1)
-		if res.Text != "" {
-			insertText(client, res.Text)
-			applyPreedit(client)
-		}
-		if res.Consumed {
-			showCandidates(client)
-			return true
-		}
-		return false
+		return page(client, 1)
 	}
 
 	if sess.Buffer() != "" && ch >= '1' && ch <= '9' {
 		if res := sess.Select(int(ch - '1')); res.Consumed {
-			insertText(client, res.Text)
-			applyPreedit(client)
-			return true
+			return commit(client, res)
 		}
 	}
 	// [ / ] 取当前候选的首字 / 尾字，编码消耗和正常选词一样。
 	if sess.Buffer() != "" && (ch == '[' || ch == ']') {
 		if res := sess.SelectChar(0, ch == ']'); res.Consumed {
-			insertText(client, res.Text)
-			applyPreedit(client)
-			return true
+			return commit(client, res)
 		}
 	}
 	// = / - 翻页。候选窗开着时由输入法接管，到边界也不再当字符上屏。
@@ -231,23 +164,16 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 		if ch == '-' {
 			delta = -1
 		}
-		if res := sess.Page(delta); res.Consumed {
-			showCandidates(client)
+		if page(client, delta) {
 			return true
 		}
 	}
 	if ch >= 'a' && ch <= 'z' {
-		if res := sess.Type(raw); res.Consumed {
-			applyPreedit(client)
-			return true
-		}
-		return false
+		return commit(client, sess.Type(raw))
 	}
 	// 标点：先把已经输入的词上屏，再插入中文标点，这个键被消费掉。
 	if res := sess.Punctuate(ch); res.Consumed {
-		insertText(client, res.Text)
-		applyPreedit(client)
-		return true
+		return commit(client, res)
 	}
 	// 其他可打印字符：先把已经输入的词上屏，这个键照常交给应用。
 	if res := sess.Passthrough(ch); res.Text != "" {
@@ -255,6 +181,32 @@ func handleEvent(self objc.ID, cmd objc.SEL, event objc.ID, client objc.ID) (han
 		applyPreedit(client)
 	}
 	return false
+}
+
+// commit 把规则层消费掉的按键结果写回应用：有文字先上屏，再刷新预编辑
+// 和候选窗。返回这个键是否被输入法吃掉；没消费时什么也不做。
+func commit(client objc.ID, res input.Result) bool {
+	if !res.Consumed {
+		return false
+	}
+	if res.Text != "" {
+		insertText(client, res.Text)
+	}
+	applyPreedit(client)
+	return true
+}
+
+// page 翻页。临时英文里翻页键先结束英文，键再交给应用。
+func page(client objc.ID, delta int) bool {
+	res := sess.Page(delta)
+	if res.Text != "" {
+		insertText(client, res.Text)
+		applyPreedit(client)
+	}
+	if res.Consumed {
+		showCandidates(client)
+	}
+	return res.Consumed
 }
 
 // handleFlags 处理 Shift 按下/松开。只有按下期间没打过别的键才算轻点。
