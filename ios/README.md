@@ -32,7 +32,9 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
   - `KeyboardModel.swift`：Swift 侧只保留 Shift 状态和宿主上下文；拼音组合、
     标点、中英模式、临时英文、空格/回车/退格和自动补空格在根目录 `input/`。
   - `KeyboardComponents.swift`：尺寸和按键；`CandidateViews.swift`：空闲工具栏、候选条、全量候选网格；`SymbolPanelView.swift`：分类符号面板；`TextGridView.swift`：两个面板共用的分列网格；iOS 26 关闭候选条与网格的 scroll edge effect，否则文字会被边缘模糊盖住。
-  - `KeyboardViewController.swift`：生命周期、布局、系统输入上下文、渲染。
+  - `KeyboardViewController.swift`：生命周期、布局、渲染，以及按键动作（`KeyAction`）的分发。
+  - `KeyRows.swift`：按尺寸建字母页和数字页的键区，把每个键接到一个 `KeyAction`。
+  - `DocumentWriter.swift`：往宿主正文写 marked text、上屏、删除和移光标的唯一入口。
 - `WenshanUITests/`：宿主 App 冒烟测试。
 - `project.yml`：XcodeGen 工程定义；`.xcodeproj` 和 Info.plist 是生成物，不入库。
 

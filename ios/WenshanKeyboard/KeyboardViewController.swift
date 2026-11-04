@@ -3,9 +3,18 @@ import os
 
 private let keyboardLog = Logger(subsystem: "im.wenshan.ios.keyboard", category: "lifecycle")
 
-/// 键盘扩展入口：只做布局、渲染和按键转发，输入语义在 KeyboardModel。
+/// 键盘扩展入口：生命周期、布局、渲染和按键动作分发。输入语义在 KeyboardModel，
+/// 键区怎么排在 KeyRowsBuilder，往宿主正文写东西在 DocumentWriter。
 final class KeyboardViewController: UIInputViewController {
+    /// 盖在键区上的面板，同一时间最多一个。
+    private enum Overlay {
+        case none
+        case candidates
+        case symbols
+    }
+
     private let model = KeyboardModel()
+    private lazy var writer = DocumentWriter { [unowned self] in self.textDocumentProxy }
     private let toolbarBar = ToolbarBar()
     private let candidateBar = CandidateBar()
     private let candidatePanel = CandidatePanel()
@@ -21,31 +30,16 @@ final class KeyboardViewController: UIInputViewController {
     private var topBarHeightConstraint: NSLayoutConstraint!
     private var metrics = KeyboardMetrics.make(screen: .zero, width: 0, isPad: false, isFloating: false)
 
-    private var shiftButton: KeyButton?
-    private var modeButton: KeyButton?
-    private var returnButton: KeyButton?
-    private var punctuationButton: KeyButton?
+    private var keys = KeyRows()
     private weak var previewedButton: KeyButton?
-    private var layer: Layer = .letters
-    private var hasMarkedText = false
-    private var isApplyingText = false
-    private var isCandidatePanelOpen = false
-    private var isSymbolPanelOpen = false
-
-    private enum Layer {
-        case letters
-        case numbers
-    }
-
-    private let letterRows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
+    private var layer: KeyboardLayer = .letters
+    private var overlay: Overlay = .none
 
     override func viewDidLoad() {
         super.viewDidLoad()
         keyboardLog.info("viewDidLoad")
         // 规则层判断中英文之间要不要补空格，读的是宿主正文里光标前的字符。
-        model.contextBefore = { [weak self] in
-            self?.textDocumentProxy.documentContextBeforeInput ?? ""
-        }
+        model.contextBefore = { [weak self] in self?.writer.contextBefore ?? "" }
         buildUI()
         loadEngine()
         render()
@@ -59,8 +53,7 @@ final class KeyboardViewController: UIInputViewController {
         if model.phase != .ready {
             loadEngine()
         }
-        closeCandidatePanel()
-        closeSymbolPanel()
+        setOverlay(.none)
         layer = .letters
         renderKeyboardRows()
         render()
@@ -71,11 +64,10 @@ final class KeyboardViewController: UIInputViewController {
         super.viewWillDisappear(animated)
         model.flush()
         model.reset()
-        clearMarkedText()
+        writer.clearMarkedText()
         hidePreview()
         keyEvents.reset()
-        closeCandidatePanel()
-        closeSymbolPanel()
+        setOverlay(.none)
         candidateBar.setCandidates([])
     }
 
@@ -84,7 +76,7 @@ final class KeyboardViewController: UIInputViewController {
         // 回车键的标题和高亮要跟着新输入框的 returnKeyType 走。
         updateContext()
         updateKeys()
-        guard !isApplyingText, !isOwnComposition() else { return }
+        guard !writer.isWriting, !writer.endsWithMarkedText(model.preedit) else { return }
         handleExternalChange()
     }
 
@@ -94,22 +86,6 @@ final class KeyboardViewController: UIInputViewController {
 
     override func selectionDidChange(_ textInput: UITextInput?) {
         handleExternalChange()
-    }
-
-    /// 宿主改了正文或光标（点到别处、粘贴、App 自己改内容）：只在组合态重置，
-    /// render 会顺带清掉 marked text。
-    private func handleExternalChange() {
-        closeSymbolPanel()
-        guard model.isComposing else { return }
-        model.reset()
-        render()
-    }
-
-    /// 部分宿主会在 setMarkedText 之后异步回调 textDidChange，这时 isApplyingText
-    /// 早已复位。光标前仍以当前预编辑串结尾，说明是自己的组合，不算外部改动。
-    private func isOwnComposition() -> Bool {
-        guard model.isComposing, hasMarkedText else { return false }
-        return textDocumentProxy.documentContextBeforeInput?.hasSuffix(model.preedit) ?? false
     }
 
     override func viewWillTransition(
@@ -125,6 +101,15 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateMetrics()
+    }
+
+    /// 宿主改了正文或光标（点到别处、粘贴、App 自己改内容）：只在组合态重置，
+    /// render 会顺带清掉 marked text。
+    private func handleExternalChange() {
+        dismissOverlay(.symbols)
+        guard model.isComposing else { return }
+        model.reset()
+        render()
     }
 
     // MARK: - UI
@@ -159,36 +144,26 @@ final class KeyboardViewController: UIInputViewController {
         candidateBar.setCandidateFont(.systemFont(ofSize: metrics.candidateFontSize))
         candidateBar.onSelect = { [weak self] index in
             guard let self else { return }
-            self.closeCandidatePanel()
-            self.closeSymbolPanel()
-            self.playSelectionFeedback()
-            self.apply(self.model.select(index))
+            self.pick(self.model.select(index))
         }
         candidateBar.onSelectChar = { [weak self] index, last in
             guard let self else { return }
-            self.closeCandidatePanel()
-            self.closeSymbolPanel()
-            self.playSelectionFeedback()
-            self.apply(self.model.selectChar(index, last: last))
+            self.pick(self.model.selectChar(index, last: last))
         }
         candidateBar.onExpand = { [weak self] in
             self?.toggleCandidatePanel()
         }
         candidateBar.onDismiss = { [weak self] in
-            guard let self else { return }
-            self.closeCandidatePanel()
-            self.closeSymbolPanel()
-            self.dismissKeyboard()
+            self?.setOverlay(.none)
+            self?.dismissKeyboard()
         }
         toolbarBar.onToggleFullWidth = { [weak self] in
             guard let self else { return }
             self.apply(self.model.toggleFullWidth())
         }
         toolbarBar.onDismiss = { [weak self] in
-            guard let self else { return }
-            self.closeCandidatePanel()
-            self.closeSymbolPanel()
-            self.dismissKeyboard()
+            self?.setOverlay(.none)
+            self?.dismissKeyboard()
         }
         toolbarBar.setStatus("加载中…")
         toolbarBar.setFullWidth(model.fullWidth)
@@ -198,21 +173,16 @@ final class KeyboardViewController: UIInputViewController {
         candidatePanel.isHidden = true
         candidatePanel.onSelect = { [weak self] index in
             guard let self else { return }
-            self.closeCandidatePanel()
-            self.closeSymbolPanel()
-            self.playSelectionFeedback()
-            self.apply(self.model.selectGlobal(index))
+            self.pick(self.model.selectGlobal(index))
         }
 
         symbolPanel.isHidden = true
         symbolPanel.onInsert = { [weak self] symbol in
             guard let self else { return }
-            self.closeSymbolPanel()
-            self.playSelectionFeedback()
-            self.apply(self.model.insert(symbol))
+            self.pick(self.model.insert(symbol))
         }
         symbolPanel.onClose = { [weak self] in
-            self?.closeSymbolPanel()
+            self?.dismissOverlay(.symbols)
         }
 
         keyboardStack.axis = .vertical
@@ -266,13 +236,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private func updateMetrics() {
         let next = currentMetrics()
-        guard next.totalHeight != metrics.totalHeight
-            || next.candidateHeight != metrics.candidateHeight
-            || next.gap != metrics.gap
-            || next.keyFontSize != metrics.keyFontSize
-            || next.candidateFontSize != metrics.candidateFontSize
-            || next.letterWidth != metrics.letterWidth
-        else { return }
+        guard next != metrics else { return }
         metrics = next
         heightConstraint.constant = next.totalHeight
         topBarHeightConstraint.constant = next.candidateHeight
@@ -283,393 +247,83 @@ final class KeyboardViewController: UIInputViewController {
         view.setNeedsLayout()
     }
 
-    /// 按当前页重建键盘行。只在切页/换方向时调用，不在每次按键时调用。
+    /// 按当前页重建键区。只在切页/换方向时调用，不在每次按键时调用。
     private func renderKeyboardRows() {
         keyboardStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        shiftButton = nil
-        modeButton = nil
-        returnButton = nil
-        punctuationButton = nil
         hidePreview()
+        keys = KeyRowsBuilder(
+            metrics: metrics,
+            showsGlobeKey: needsInputModeSwitchKey,
+            keyEvents: keyEvents,
+            host: self
+        ).build(layer)
+        keys.rows.forEach(keyboardStack.addArrangedSubview)
+    }
 
-        switch layer {
-        case .numbers:
-            keyboardStack.addArrangedSubview(makeNumberRow(["1", "2", "3"], trailing: makeDeleteKey()))
-            keyboardStack.addArrangedSubview(makeNumberRow(["4", "5", "6"], trailing: makeNumberSpaceKey()))
-            keyboardStack.addArrangedSubview(makeNumberRow(["7", "8", "9"], trailing: makeNumberReturnKey()))
-            keyboardStack.addArrangedSubview(makeNumberBottomRow())
-        case .letters:
-            for (index, row) in letterRows.enumerated() {
-                if index == 2 {
-                    keyboardStack.addArrangedSubview(makeLetterBottomRow(row))
-                } else {
-                    keyboardStack.addArrangedSubview(makeRow(row.map { character in
-                        makeKey(
-                            title: String(character),
-                            identifier: "key_\(character)",
-                            action: { [weak self] in
-                                guard let self else { return }
-                                self.apply(self.model.type(String(character)))
-                            })
-                    }, margin: index == 1 ? metrics.letterWidth / 2 : 0))
-                }
-            }
-            keyboardStack.addArrangedSubview(makeLetterFunctionRow())
+    private func showLayer(_ next: KeyboardLayer) {
+        setOverlay(.none)
+        layer = next
+        renderKeyboardRows()
+        render()
+    }
+
+    // MARK: - 面板
+
+    /// 切换盖在键区上的面板：处理显隐、键区交互和旁白焦点。
+    private func setOverlay(_ next: Overlay) {
+        guard next != overlay else { return }
+        if overlay == .candidates {
+            candidatePanel.setCandidates([])
+            candidateBar.setExpanded(false)
+        }
+        overlay = next
+        candidatePanel.isHidden = next != .candidates
+        symbolPanel.isHidden = next != .symbols
+        keyboardStack.accessibilityElementsHidden = next != .none
+        keyboardStack.isUserInteractionEnabled = next == .none
+        let focus: UIView
+        switch next {
+        case .candidates:
+            candidateBar.setExpanded(true)
+            focus = candidatePanel
+        case .symbols:
+            hidePreview()
+            focus = symbolPanel
+        case .none:
+            focus = candidateBar.isHidden ? toolbarBar : candidateBar
+        }
+        UIAccessibility.post(notification: .screenChanged, argument: focus)
+    }
+
+    /// 只在指定面板开着时关掉它。
+    private func dismissOverlay(_ which: Overlay) {
+        if overlay == which {
+            setOverlay(.none)
         }
     }
 
-    private func makeRow(_ keys: [KeyButton], margin: CGFloat = 0) -> UIStackView {
-        let row = UIStackView(arrangedSubviews: keys)
-        row.axis = .horizontal
-        row.spacing = metrics.gap
-        row.distribution = .fillEqually
-        row.alignment = .fill
-        row.translatesAutoresizingMaskIntoConstraints = false
-        if margin > 0 {
-            row.isLayoutMarginsRelativeArrangement = true
-            row.directionalLayoutMargins = NSDirectionalEdgeInsets(
-                top: 0, leading: margin, bottom: 0, trailing: margin)
+    private func toggleCandidatePanel() {
+        if overlay == .candidates {
+            setOverlay(.none)
+            return
         }
-        return row
+        let all = model.isComposing ? model.allCandidates() : []
+        guard !all.isEmpty else {
+            dismissOverlay(.symbols)
+            return
+        }
+        candidatePanel.setCandidates(all)
+        setOverlay(.candidates)
     }
 
-    /// 固定宽度键 + 可伸缩键。用于底行和 Z 行的宽 Shift/删除。
-    private func makeProportionalRow(_ items: [(UIView, CGFloat?)]) -> UIStackView {
-        let row = UIStackView(arrangedSubviews: items.map { $0.0 })
-        row.axis = .horizontal
-        row.spacing = metrics.gap
-        row.distribution = .fill
-        row.alignment = .fill
-        row.translatesAutoresizingMaskIntoConstraints = false
-        for (view, width) in items {
-            if let width {
-                view.widthAnchor.constraint(equalToConstant: width).isActive = true
-                view.setContentHuggingPriority(.required, for: .horizontal)
-                view.setContentCompressionResistancePriority(.required, for: .horizontal)
-            } else {
-                view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-                view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            }
-        }
-        return row
-    }
-
-    private func makeNumberRow(_ digits: [String], trailing: KeyButton) -> UIStackView {
-        var keys = digits.map { makeNumberKey($0) }
-        keys.append(trailing)
-        return makeRow(keys)
-    }
-
-    private func makeNumberKey(_ digit: String) -> KeyButton {
-        let key = makeKey(
-            title: digit,
-            identifier: "key_number_\(digit)",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.insert(digit))
-            },
-            font: .systemFont(ofSize: metrics.keyFontSize + 1))
-        key.accessibilityLabel = "数字 \(digit)"
-        return key
-    }
-
-    private func makeNumberSpaceKey() -> KeyButton {
-        let space = makeKey(
-            title: "空格",
-            identifier: "key_space",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.space())
-            },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        space.accessibilityLabel = "空格"
-        configureSpaceKey(space)
-        return space
-    }
-
-    private func makeNumberReturnKey() -> KeyButton {
-        let returnKey = makeKey(
-            title: "换行",
-            identifier: "key_return",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.returnKey())
-            },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        returnKey.accessibilityLabel = "换行"
-        configureReturnKey(returnKey)
-        returnButton = returnKey
-        return returnKey
-    }
-
-    private func makeNumberBottomRow() -> UIStackView {
-        let dot = makeKey(
-            title: ".",
-            identifier: "key_number_dot",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.insert("."))
-            },
-            font: .systemFont(ofSize: metrics.keyFontSize + 1))
-        dot.accessibilityLabel = "小数点"
-
-        let symbols = makeKey(
-            title: "符",
-            identifier: "key_symbol_panel",
-            action: { [weak self] in self?.showSymbols() },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        symbols.accessibilityLabel = "符号"
-
-        let letters = makeKey(
-            title: "ABC",
-            identifier: "key_letters",
-            action: { [weak self] in self?.showLetters() },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        letters.accessibilityLabel = "字母"
-
-        return makeRow([dot, makeNumberKey("0"), symbols, letters])
-    }
-
-    private func makeLetterBottomRow(_ row: String) -> UIStackView {
-        let shift = makeKey(
-            title: "⇧",
-            identifier: "key_shift",
-            action: { [weak self] in
-                guard let self else { return }
-                self.model.shiftTapped()
-                self.render()
-            },
-            background: KeyboardPalette.functionKey,
-            showsPreview: false)
-        shift.accessibilityLabel = "大写"
-        shiftButton = shift
-
-        let letters = row.map { character in
-            makeKey(
-                title: String(character),
-                identifier: "key_\(character)",
-                action: { [weak self] in
-                    guard let self else { return }
-                    self.apply(self.model.type(String(character)))
-                })
-        }
-        let lettersRow = makeRow(letters)
-
-        let delete = makeDeleteKey()
-
-        let sideWidth = metrics.letterWidth * 1.3
-        return makeProportionalRow([(shift, sideWidth), (lettersRow, nil), (delete, sideWidth)])
-    }
-
-    private func makeLetterFunctionRow() -> UIStackView {
-        let numbers = makeKey(
-            title: "123",
-            identifier: "key_symbols",
-            action: { [weak self] in self?.showNumbers() },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        numbers.accessibilityLabel = "数字"
-        numbers.accessibilityHint = "长按输入符号"
-        numbers.onLongPress = { [weak self] in
-            self?.showSymbols()
-            return true
-        }
-
-        let punctuation = makeKey(
-            title: "。\n，",
-            identifier: "key_punctuation",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.punctuate("."))
-            },
-            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)),
-            previewText: "。")
-        punctuation.titleLabel?.numberOfLines = 2
-        punctuation.titleLabel?.textAlignment = .center
-        punctuation.accessibilityLabel = "句号，长按逗号"
-        punctuation.onLongPress = { [weak self] in
-            guard let self else { return false }
-            self.apply(self.model.punctuate(","))
-            return true
-        }
-        punctuationButton = punctuation
-
-        let mode = makeKey(
-            title: "中\n英",
-            identifier: "key_mode",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.toggleMode())
-            },
-            font: .systemFont(ofSize: max(11, metrics.keyFontSize - 9)),
-            showsPreview: false)
-        mode.titleLabel?.numberOfLines = 2
-        mode.titleLabel?.textAlignment = .center
-        mode.accessibilityLabel = "切换中英文"
-        modeButton = mode
-
-        let space = makeKey(
-            title: "空格",
-            identifier: "key_space",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.space())
-            },
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        space.accessibilityLabel = "空格"
-        configureSpaceKey(space)
-
-        let returnKey = makeKey(
-            title: "换行",
-            identifier: "key_return",
-            action: { [weak self] in
-                guard let self else { return }
-                self.apply(self.model.returnKey())
-            },
-            background: KeyboardPalette.functionKey,
-            font: .systemFont(ofSize: max(15, metrics.keyFontSize - 6)),
-            showsPreview: false)
-        returnKey.accessibilityLabel = "换行"
-        configureReturnKey(returnKey)
-        returnButton = returnKey
-
-        let unit = metrics.letterWidth
-        var items: [(UIView, CGFloat?)] = [
-            (numbers, max(44, unit * 1.15)),
-            (punctuation, max(44, unit * 0.65)),
-            (space, nil),
-            (mode, max(44, unit)),
-            (returnKey, max(44, unit * 1.15)),
-        ]
-        if needsInputModeSwitchKey {
-            items.insert((makeGlobeKey(), 44), at: 1)
-        }
-        return makeProportionalRow(items)
-    }
-
-    private func makeKey(
-        title: String,
-        identifier: String,
-        action: @escaping () -> Void,
-        background: UIColor = KeyboardPalette.key,
-        font: UIFont? = nil,
-        showsPreview: Bool = true,
-        previewText: String? = nil,
-        longPressText: String? = nil
-    ) -> KeyButton {
-        let button = KeyButton(
-            title: title,
-            identifier: identifier,
-            font: font ?? .systemFont(ofSize: metrics.keyFontSize),
-            background: background)
-        button.showsPreview = showsPreview
-        button.previewText = previewText
-        button.onTap = { [weak self, weak button] in
-            guard let self, let button else { return }
-            self.keyEvents.commit(button.eventSequence) { action() }
-        }
-        button.onCancelled = { [weak self, weak button] in
-            guard let self, let button else { return }
-            self.keyEvents.cancel(button.eventSequence)
-        }
-        button.onPressChanged = { [weak self, weak button] pressed in
-            guard let self, let button else { return }
-            if pressed {
-                if button.queuesEvent {
-                    button.eventSequence = self.keyEvents.begin()
-                }
-                self.playKeyFeedback()
-                self.showPreview(for: button)
-            } else {
-                self.hidePreview(for: button)
-            }
-        }
-        if let longPressText {
-            button.accessibilityHint = "长按输入\(longPressText)"
-            button.onLongPress = { [weak self] in
-                guard let self else { return false }
-                self.apply(self.model.insert(longPressText))
-                return true
-            }
-        }
-        return button
-    }
-
-    private func makeDeleteKey() -> KeyButton {
-        let delete = makeKey(
-            title: "⌫",
-            identifier: "key_delete",
-            action: {},
-            background: KeyboardPalette.functionKey,
-            showsPreview: false)
-        delete.accessibilityLabel = "删除"
-        delete.queuesEvent = false
-        delete.triggersOnPress = true
-        delete.onRepeat = { [weak self] in
-            guard let self else { return }
-            self.apply(self.model.backspace())
-        }
-        delete.onDrag = { [weak self] delta in
-            self?.deleteByDrag(delta)
-        }
-        return delete
-    }
-
-    private func makeGlobeKey() -> KeyButton {
-        let globe = makeKey(
-            title: "",
-            identifier: "key_globe",
-            action: { [weak self] in self?.advanceToNextInputMode() },
-            background: KeyboardPalette.functionKey,
-            showsPreview: false)
-        let symbol = UIImage.SymbolConfiguration(
-            pointSize: metrics.keyFontSize,
-            weight: .regular)
-        globe.setImage(UIImage(systemName: "globe", withConfiguration: symbol), for: .normal)
-        globe.tintColor = .label
-        globe.accessibilityLabel = "切换键盘"
-        return globe
-    }
-
-    private func configureReturnKey(_ key: KeyButton) {
-        key.onLongPress = { [weak self] in
-            guard let self, !self.model.isComposing, self.model.returnKeyType != .default else {
-                return false
-            }
-            self.apply(.commit("\n"))
-            return true
-        }
-    }
-
-    private func configureSpaceKey(_ key: KeyButton) {
-        key.dragRequiresLongPress = true
-        key.dragStep = 5
-        key.dragVerticalLimit = 50
-        key.accessibilityHint = "长按拖动移动光标"
-        key.onLongPress = { [weak self] in
-            guard let self, !self.model.isComposing else { return false }
-            return true
-        }
-        key.onDrag = { [weak self] delta in
-            self?.moveCursor(by: Int(delta))
-        }
-    }
-
-    private func moveCursor(by steps: Int) {
-        guard steps != 0 else { return }
-        textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
+    /// 从候选条、全部候选或符号面板选中一项：关面板、触感、上屏。
+    private func pick(_ outcome: KeyboardOutcome) {
+        setOverlay(.none)
         playSelectionFeedback()
+        apply(outcome)
     }
+
+    // MARK: - 按键反馈
 
     private func playKeyFeedback() {
         guard hasFullAccess else { return }
@@ -702,23 +356,10 @@ final class KeyboardViewController: UIInputViewController {
         keyPreview.hide()
     }
 
-    private func deleteByDrag(_ delta: CGFloat) {
-        guard delta < 0 else { return }
-        delete(times: Int(-delta))
-    }
-
-    private func delete(times: Int) {
-        guard times > 0 else { return }
-        for _ in 0..<times {
-            apply(model.backspace(), renderNow: false)
-        }
-        render()
-    }
-
     // MARK: - 引擎和上下文
 
     private func loadEngine() {
-        let directory = dataDirectory()
+        let directory = AppGroup.keyboardDataDirectory()
         keyboardLog.info("loadEngine data=\(directory.path, privacy: .public)")
         Task { [weak self] in
             await self?.model.load(dataDirectory: directory)
@@ -729,26 +370,6 @@ final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    /// App Group 可写时用共享目录；否则退回扩展自己的 Documents。
-    private func dataDirectory() -> URL {
-        let fm = FileManager.default
-        if let group = AppGroup.dataDirectoryURL {
-            do {
-                try fm.createDirectory(at: group, withIntermediateDirectories: true)
-                let probe = group.appendingPathComponent(".write-test")
-                try Data().write(to: probe, options: .atomic)
-                try? fm.removeItem(at: probe)
-                return group
-            } catch {
-                // 没有 Full Access 时 App Group 可能只读，继续走沙箱。
-            }
-        }
-        let documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let fallback = documents.appendingPathComponent("Wenshan", isDirectory: true)
-        try? fm.createDirectory(at: fallback, withIntermediateDirectories: true)
-        return fallback
-    }
-
     private func updateContext() {
         model.updateContext(returnKeyType: textDocumentProxy.returnKeyType ?? .default)
     }
@@ -756,9 +377,9 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - 渲染
 
     private func render() {
-        updateMarkedText()
+        writer.setMarkedText(model.isComposing ? model.preedit : "")
         updateTopBar()
-        updateCandidateBar()
+        candidateBar.setCandidates(model.candidates)
         updateKeys()
     }
 
@@ -779,137 +400,105 @@ final class KeyboardViewController: UIInputViewController {
         toolbarBar.setFullWidthEnabled(model.phase == .ready)
 
         if !composing {
-            closeCandidatePanel()
+            dismissOverlay(.candidates)
         }
-    }
-
-    private func updateCandidateBar() {
-        candidateBar.setCandidates(model.candidates)
-    }
-
-    private func updateMarkedText() {
-        let text = model.isComposing ? model.preedit : ""
-        if text.isEmpty {
-            clearMarkedText()
-            return
-        }
-        isApplyingText = true
-        textDocumentProxy.setMarkedText(
-            text,
-            selectedRange: NSRange(location: text.utf16.count, length: 0))
-        isApplyingText = false
-        hasMarkedText = true
-    }
-
-    private func clearMarkedText() {
-        guard hasMarkedText else { return }
-        isApplyingText = true
-        textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
-        isApplyingText = false
-        hasMarkedText = false
     }
 
     private func updateKeys() {
-        shiftButton?.setTitle(model.shift == .locked ? "⇪" : "⇧", for: .normal)
-        shiftButton?.setActive(model.shift.isActive)
-        modeButton?.setActive(model.mode == .english)
-        punctuationButton?.setTitle(model.mode == .chinese ? "。\n，" : ".\n,", for: .normal)
-        punctuationButton?.previewText = model.mode == .chinese ? "。" : "."
-        returnButton?.setTitle(model.returnKeyTitle, for: .normal)
-        returnButton?.accessibilityLabel = model.returnKeyTitle
-        returnButton?.setActive(model.isReturnKeyProminent)
-    }
-
-    private func showNumbers() {
-        closeCandidatePanel()
-        closeSymbolPanel()
-        layer = .numbers
-        renderKeyboardRows()
-        render()
-    }
-
-    private func showLetters() {
-        closeCandidatePanel()
-        closeSymbolPanel()
-        layer = .letters
-        renderKeyboardRows()
-        render()
-    }
-
-    private func showSymbols() {
-        closeCandidatePanel()
-        guard !isSymbolPanelOpen else { return }
-        hidePreview()
-        symbolPanel.isHidden = false
-        isSymbolPanelOpen = true
-        updateKeyboardStackInteraction()
-        UIAccessibility.post(notification: .screenChanged, argument: symbolPanel)
-    }
-
-    private func closeSymbolPanel() {
-        guard isSymbolPanelOpen else { return }
-        isSymbolPanelOpen = false
-        symbolPanel.isHidden = true
-        updateKeyboardStackInteraction()
-        UIAccessibility.post(
-            notification: .screenChanged,
-            argument: candidateBar.isHidden ? toolbarBar : candidateBar)
-    }
-
-    private func updateKeyboardStackInteraction() {
-        let blocked = isCandidatePanelOpen || isSymbolPanelOpen
-        keyboardStack.accessibilityElementsHidden = blocked
-        keyboardStack.isUserInteractionEnabled = !blocked
-    }
-
-    private func toggleCandidatePanel() {
-        if isCandidatePanelOpen {
-            closeCandidatePanel()
-            return
-        }
-        closeSymbolPanel()
-        guard model.isComposing else { return }
-        let all = model.allCandidates()
-        guard !all.isEmpty else { return }
-        candidatePanel.setCandidates(all)
-        candidatePanel.isHidden = false
-        isCandidatePanelOpen = true
-        updateKeyboardStackInteraction()
-        candidateBar.setExpanded(true)
-        UIAccessibility.post(notification: .screenChanged, argument: candidatePanel)
-    }
-
-    private func closeCandidatePanel() {
-        guard isCandidatePanelOpen else { return }
-        isCandidatePanelOpen = false
-        candidatePanel.isHidden = true
-        candidatePanel.setCandidates([])
-        updateKeyboardStackInteraction()
-        candidateBar.setExpanded(false)
-        UIAccessibility.post(
-            notification: .screenChanged,
-            argument: candidateBar.isHidden ? toolbarBar : candidateBar)
+        let chinese = model.mode == .chinese
+        keys.shift?.setTitle(model.shift == .locked ? "⇪" : "⇧", for: .normal)
+        keys.shift?.setActive(model.shift.isActive)
+        keys.mode?.setActive(!chinese)
+        keys.punctuation?.setTitle(chinese ? "。\n，" : ".\n,", for: .normal)
+        keys.punctuation?.previewText = chinese ? "。" : "."
+        keys.returnKey?.setTitle(model.returnKeyTitle, for: .normal)
+        keys.returnKey?.accessibilityLabel = model.returnKeyTitle
+        keys.returnKey?.setActive(model.isReturnKeyProminent)
     }
 
     private func apply(_ outcome: KeyboardOutcome, renderNow: Bool = true) {
         switch outcome {
         case .commit(let text):
-            isApplyingText = true
-            if hasMarkedText {
-                textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
-                hasMarkedText = false
-            }
-            if !text.isEmpty {
-                textDocumentProxy.insertText(text)
-            }
-            isApplyingText = false
+            writer.insert(text)
         case .deleteBackward:
-            isApplyingText = true
-            textDocumentProxy.deleteBackward()
-            isApplyingText = false
+            writer.deleteBackward()
         case .handled, .idle:
             break
         }
         if renderNow { render() }
+    }
+
+    private func delete(times: Int) {
+        guard times > 0 else { return }
+        for _ in 0..<times {
+            apply(model.backspace(), renderNow: false)
+        }
+        render()
+    }
+}
+
+extension KeyboardViewController: KeyRowsHost {
+    func perform(_ action: KeyAction) {
+        switch action {
+        case .type(let key):
+            apply(model.type(key))
+        case .insert(let text):
+            apply(model.insert(text))
+        case .punctuate(let ch):
+            apply(model.punctuate(ch))
+        case .space:
+            apply(model.space())
+        case .returnKey:
+            apply(model.returnKey())
+        case .newline:
+            apply(.commit("\n"))
+        case .backspace:
+            apply(model.backspace())
+        case .deleteBackward(let times):
+            delete(times: times)
+        case .moveCursor(let steps):
+            guard steps != 0 else { return }
+            writer.moveCursor(by: steps)
+            playSelectionFeedback()
+        case .cursorDrag:
+            break
+        case .shift:
+            model.shiftTapped()
+            render()
+        case .toggleMode:
+            apply(model.toggleMode())
+        case .showNumbers:
+            showLayer(.numbers)
+        case .showLetters:
+            showLayer(.letters)
+        case .showSymbols:
+            setOverlay(.symbols)
+        case .nextInputMode:
+            advanceToNextInputMode()
+        }
+    }
+
+    func performLongPress(_ action: KeyAction) -> Bool {
+        switch action {
+        case .newline:
+            // 组合态回车是「确认」，默认回车键本来就换行，这两种情况长按不另做事。
+            guard !model.isComposing, model.returnKeyType != .default else { return false }
+        case .cursorDrag:
+            // 组合态空格是上屏首选，不拖光标。
+            return !model.isComposing
+        default:
+            break
+        }
+        perform(action)
+        return true
+    }
+
+    func keyPressChanged(_ key: KeyButton, pressed: Bool) {
+        if pressed {
+            playKeyFeedback()
+            showPreview(for: key)
+        } else {
+            hidePreview(for: key)
+        }
     }
 }

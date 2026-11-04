@@ -1,7 +1,7 @@
 import UIKit
 
 /// 键盘尺寸。iPhone 保持紧凑两档；iPad 按屏幕高度分档，浮动/分屏单独一档。
-struct KeyboardMetrics {
+struct KeyboardMetrics: Equatable {
     let totalHeight: CGFloat
     let candidateHeight: CGFloat
     let gap: CGFloat
@@ -16,7 +16,7 @@ struct KeyboardMetrics {
         isFloating: Bool = false
     ) -> KeyboardMetrics {
         let landscape = screen.width > screen.height
-        let gap: CGFloat = isPad ? (isFloating ? 5 : 6) : (landscape ? 5 : 5)
+        let gap: CGFloat = isPad && !isFloating ? 6 : 5
         let contentWidth = max(0, width - 12)
         let letterWidth = max(26, (contentWidth - 9 * gap) / 10)
         if isPad {
