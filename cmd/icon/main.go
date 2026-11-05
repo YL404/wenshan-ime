@@ -1,5 +1,5 @@
 // Command icon 画文山输入法的图标：纸色圆角方形 + 分层墨色山峦 + 红日 + 云带，
-// 同时输出输入源列表和菜单栏用的 22×16 单色镂空图标。
+// 同时输出输入源列表和菜单栏用的 22×16 单色镂空图标，以及 iOS 的满版 AppIcon。
 //
 //	go run ./cmd/icon -out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset
 //
@@ -66,6 +66,7 @@ const menuW = 22
 func main() {
 	out := flag.String("out", "build/Wenshan.iconset", "App 图标的 iconset 目录")
 	menuOut := flag.String("menu-out", "build/WenshanMenu.iconset", "输入源图标的 iconset 目录")
+	iosOut := flag.String("ios-out", "", "另外输出 iOS 的 1024×1024 满版 AppIcon")
 	preview := flag.String("preview", "", "另外输出一张 App 图标预览图")
 	menuPreview := flag.String("menu-preview", "", "另外输出一张输入源图标预览图")
 	flag.Parse()
@@ -87,6 +88,15 @@ func main() {
 	}
 	fmt.Printf("%s: %d 个尺寸\n", *out, len(iconset))
 	fmt.Printf("%s: %d 个尺寸\n", *menuOut, len(menuIcons))
+	if *iosOut != "" {
+		if err := os.MkdirAll(filepath.Dir(*iosOut), 0o755); err != nil {
+			log.Fatal(err)
+		}
+		if err := writePNG(*iosOut, renderIOS(1024)); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(*iosOut)
+	}
 	if *preview != "" {
 		if err := writePNG(*preview, renderApp(512)); err != nil {
 			log.Fatal(err)
@@ -113,9 +123,9 @@ func writePNG(path string, img image.Image) error {
 	return f.Close()
 }
 
-// renderApp 画一张 size×size 的 App 图标：纸底、红日、四层山峦，云带拦腰。
+// renderScene 画 size×size 的满版场景：纸底、红日、四层山峦，云带拦腰。
 // 绘制顺序就是深度顺序：日最远，墨山最近。
-func renderApp(size int) *image.RGBA {
+func renderScene(size int) *image.RGBA {
 	ss := 4
 	w := size * ss
 	img := image.NewRGBA(image.Rect(0, 0, w, w))
@@ -129,9 +139,20 @@ func renderApp(size int) *image.RGBA {
 	fill(img, washNear, scalePoints(ridge(62, 56, 34, 73, 88, 70, -10, 110, 88), s))
 	fill(img, ink, scalePoints(ridge(40, 53, 6, 71, 66, 62, -10, 110, 95), s))
 
-	out := downsample(img, ss)
+	return downsample(img, ss)
+}
+
+// renderApp 画 macOS 的圆角方形 App 图标。
+func renderApp(size int) *image.RGBA {
+	out := renderScene(size)
 	maskSquircle(out)
 	return out
+}
+
+// renderIOS 画满版 iOS AppIcon。iOS 自己按设备裁圆角，素材不能预切圆角，
+// 也不能带透明边，所以山峦和纸底都铺到画布四边。
+func renderIOS(size int) *image.RGBA {
+	return renderScene(size)
 }
 
 // mountain 是输入源图标里挖空的山形，坐标按 22×16 的底板中心对齐。

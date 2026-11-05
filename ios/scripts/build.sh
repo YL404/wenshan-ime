@@ -20,6 +20,7 @@ PATH="$(go env GOPATH)/bin:$PATH" gomobile bind \
     ./ios/mobile
 
 cd ios
+go run ../cmd/icon -ios-out WenshanHost/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 xcodegen generate
 xcodebuild \
     -project Wenshan.xcodeproj \

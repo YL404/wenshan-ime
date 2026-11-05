@@ -24,6 +24,7 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
   - `Flush()`：把所有未落盘的词频和自造词写盘，键盘收起时调用；平时每次按键只在词频攒够 50 次时写。
 - `Shared/AppGroup.swift`：App Group 标识和共享目录路径。
 - `WenshanHost/`：宿主 App。
+  - `Assets.xcassets`：App 图标。`cmd/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
   - `DictDeployer.swift`：把扩展 Bundle 里的 `dict.bin` 原子部署到 App Group。
   - `ContentView.swift`：启用说明、词表状态、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
@@ -72,8 +73,9 @@ sh ios/scripts/build.sh
 
 1. 把根目录 `dict.bin` 复制到 `ios/build/dict.bin`；
 2. 用 `gomobile bind` 生成 `ios/build/WenshanEngine.xcframework`；
-3. 用 `xcodegen` 生成 Xcode 工程；
-4. 用默认 ad-hoc 签名构建模拟器 App。
+3. 用 `cmd/icon` 生成 1024×1024 的 `AppIcon.png`；
+4. 用 `xcodegen` 生成 Xcode 工程；
+5. 用默认 ad-hoc 签名构建模拟器 App。
 
 产物在 `ios/build/DerivedData/Build/Products/Debug-iphonesimulator/WenshanHost.app`。
 
