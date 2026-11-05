@@ -140,6 +140,11 @@ sh scripts/repair.sh
 - 临时英文从已有拼音缓冲开始，首字母大写的混合大小写词（`GitHub`、`MacBook`）要用短语或切英文。
 - 英文模式只在当前进程内有效。
 
+## Swift 版（进行中）
+
+`swift/` 下是规则层和 macOS 壳的 Swift 移植，独立 bundle id，和 Go 版并存。
+构建、安装和验证情况见 [swift/README.md](swift/README.md)。
+
 ## 许可
 
 词表来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），单字辅码表来自
