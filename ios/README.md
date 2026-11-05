@@ -1,13 +1,13 @@
 # 文山 iOS
 
-Go 内核 + Swift 6 键盘扩展。和 macOS 共用 `engine/`，iOS 只负责键盘壳、共享数据和系统输入上下文。
+Swift 规则层 + Swift 6 键盘扩展。直接复用 `swift/Sources/WenshanCore`，iOS 只负责键盘壳、共享数据和系统输入上下文。
 
 当前可用：26 键自然码、空闲工具栏/输入候选两态顶栏、候选词块与全量候选展开、长按候选取首/尾字、
 首选上屏、Shift 一次性大写与双击锁定、中英切换、临时英文、数字九宫格、分类符号面板与长按符号、
 `returnKeyType` 标题与高亮、收起键盘、按键预览与按下缩放、删除长按连发/滑动删除、空格长按拖光标、
 快速连打顺序队列、触感（需完全访问）、iPad 分档/浮动高度、App Group 词表、用户词频/自造词/短语
 加载。地球键只在系统要求切换输入模式时出现。标点、全半角、Shift、临时英文和自动补空格与 macOS
-共用根目录的 `input/` 规则层，iOS 只保留触摸按键和渲染。
+共用 `swift/Sources/WenshanCore`，iOS 只保留触摸按键和渲染。
 
 底行按微信键盘/系统键盘的层级排：`123`、地球、句号/逗号小键、宽空格、`中/英`、发送/换行；
 Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻点上屏 `。`，长按上屏 `，`；
@@ -18,20 +18,16 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
 
 ## 结构
 
-- `mobile/`：gomobile 导出的 Go 引擎入口。
-  - `Open(dictPath, dataDir)`：映射词表，并从 `dataDir` 加载 `freq.tsv`、`userdict.tsv`、`phrases.tsv`。
-  - 每个按键动作一个导出函数，返回 `Outcome`（上屏文本、预编辑、当前页候选、模式）；`Current()` 只取状态。
-  - `Flush()`：把所有未落盘的词频和自造词写盘，键盘收起时调用；平时每次按键只在词频攒够 50 次时写。
 - `Shared/AppGroup.swift`：App Group 标识和共享目录路径。
 - `WenshanHost/`：宿主 App。
   - `Assets.xcassets`：App 图标。`cmd/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
   - `DictDeployer.swift`：把扩展 Bundle 里的 `dict.bin` 原子部署到 App Group。
   - `ContentView.swift`：启用说明、词表状态、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
-  - `WenshanBridge.swift`：gomobile 桥的 Swift 门面，唯一接触 gomobile 类型的地方；主线程隔离，
-    光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
+  - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开词表在
+    后台，其余按键在主线程，一把锁串起来。光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
   - `KeyboardModel.swift`：Swift 侧只保留 Shift 状态和宿主上下文；拼音组合、
-    标点、中英模式、临时英文、空格/回车/退格和自动补空格在根目录 `input/`。
+    标点、中英模式、临时英文、空格/回车/退格和自动补空格在 `WenshanCore`。
   - `KeyboardComponents.swift`：尺寸和按键；`CandidateViews.swift`：空闲工具栏、候选条、全量候选网格；`SymbolPanelView.swift`：分类符号面板；`TextGridView.swift`：两个面板共用的分列网格；iOS 26 关闭候选条与网格的 scroll edge effect，否则文字会被边缘模糊盖住。
   - `KeyboardViewController.swift`：生命周期、布局、渲染，以及按键动作（`KeyAction`）的分发。
   - `KeyRows.swift`：按尺寸建字母页和数字页的键区，把每个键接到一个 `KeyAction`。
@@ -60,11 +56,9 @@ WenshanKeyboard
 
 ## 构建
 
-依赖 Xcode 27、Go 1.27、XcodeGen、gomobile：
+依赖 Xcode 27、XcodeGen。图标生成仍用 Go 工具 `cmd/icon`，只影响构建，不进 App：
 
 ```sh
-go install golang.org/x/mobile/cmd/gomobile@latest
-PATH="$(go env GOPATH)/bin:$PATH" gomobile init
 brew install xcodegen
 sh ios/scripts/build.sh
 ```
@@ -72,10 +66,9 @@ sh ios/scripts/build.sh
 脚本会：
 
 1. 把根目录 `dict.bin` 复制到 `ios/build/dict.bin`；
-2. 用 `gomobile bind` 生成 `ios/build/WenshanEngine.xcframework`；
-3. 用 `cmd/icon` 生成 1024×1024 的 `AppIcon.png`；
-4. 用 `xcodegen` 生成 Xcode 工程；
-5. 用默认 ad-hoc 签名构建模拟器 App。
+2. 用 `cmd/icon` 生成 1024×1024 的 `AppIcon.png`；
+3. 用 `xcodegen` 生成 Xcode 工程（本地 Swift Package `swift/`）；
+4. 用默认 ad-hoc 签名构建模拟器 App。
 
 产物在 `ios/build/DerivedData/Build/Products/Debug-iphonesimulator/WenshanHost.app`。
 
@@ -120,12 +113,15 @@ function run([udid, developerDir]) {
 然后在宿主 App 里启用文山键盘（设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → 第三方键盘 → 文山），
 聚焦测试输入框，用 `argent run describe` 取按键坐标或直接用可访问标识。
 
+整套流程可以无头跑，不要打开 Simulator 前台。2026-11 实测：无头模拟器里点 `nihk` +
+空格，测试输入框上屏「你好」，候选条正常。
+
 ## 内存
 
-模拟器实测（iPhone 18 Pro，iOS 27.2，Debug）：键盘扩展启动约 30 MB，
+Go 版之前在模拟器（iPhone 18 Pro，iOS 27.2，Debug）实测：键盘扩展启动约 30 MB，
 完成一次上屏约 32 MB，50 次连续上屏后约 23 MB，收起键盘后回落到约 20 MB；
-没有随上屏次数线性增长。词表通过 App Group 文件 mmap，`lsof` 确认映射的是共享容器里的
-`dict.bin`，没有整块读入 Go 堆。
+词表通过 App Group 文件 mmap，没有整块读入内存。Swift 版换了规则层，这组数字需要
+重新测；结构上仍是 mmap 词表，预计同一量级。
 
 模拟器不执行键盘扩展的 jetsam 上限。真机 Release 构建仍需用 Instruments 测冷启动、
 首次输入、100 次上屏和 10 分钟空闲；目标控制在 50 MB 以内，给系统留余量。

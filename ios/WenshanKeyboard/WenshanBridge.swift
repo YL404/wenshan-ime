@@ -1,10 +1,10 @@
 import Foundation
-import WenshanEngine
+import WenshanCore
 import os
 
 private let bridgeLog = Logger(subsystem: "im.wenshan.ios.keyboard", category: "bridge")
 
-/// 规则层一次动作的结果。Swift 侧只认这个结构，不直接碰 gomobile 生成的类。
+/// 规则层一次动作的结果。Swift 侧只认这个结构，不直接碰引擎类型。
 struct BridgeOutcome: Equatable {
     /// 要插入正文的文本，已经包含自动补的空格。
     var text: String
@@ -18,97 +18,187 @@ struct BridgeOutcome: Equatable {
     var fullWidth: Bool
 }
 
-/// gomobile 桥的 Swift 门面，也是唯一接触 gomobile 生成类型的地方。
-/// 除了在后台打开词表的 open，所有调用都在主线程。
-@MainActor
-final class WenshanBridge {
+/// WenshanCore 的门面，也是唯一持有引擎状态的地方。
+/// 按键都在主线程；只有打开词表在后台任务里，所以用一把锁把状态串起来，
+/// 和原来的 Go 桥锁语义一致。
+final class WenshanBridge: @unchecked Sendable {
     /// 光标前的正文，由键盘 VC 提供。规则层判断要不要补空格时读它。
     var contextBefore: () -> String = { "" }
 
+    private let lock = NSLock()
+    private var engine: Engine?
+    private var session: Session?
+    private var lastRune: Unicode.Scalar?
+
+    private static let empty = BridgeOutcome(
+        text: "", preedit: "", candidates: [], consumed: false, isEnglish: false,
+        fullWidth: true)
+
     /// 打开词表并建立引擎。优先用主 App 部署到 App Group 的词表；
     /// 没部署或打不开时退回扩展 Bundle 里的同一份文件。
-    /// 失败时返回错误原因，成功返回 nil。Go 侧加锁，可以在后台线程调用。
-    nonisolated static func open(dataDirectory: URL) -> String? {
-        var paths: [String] = []
+    /// 失败时返回错误原因，成功返回 nil。
+    func open(dataDirectory: URL) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        session = nil
+        engine = nil
+        lastRune = nil
+
+        var paths: [URL] = []
         if let shared = AppGroup.dictURL {
-            paths.append(shared.path)
+            paths.append(shared)
         }
-        if let bundled = Bundle.main.path(forResource: "dict", ofType: "bin") {
+        if let bundled = Bundle.main.url(forResource: "dict", withExtension: "bin") {
             paths.append(bundled)
         }
         guard !paths.isEmpty else {
             return "扩展里找不到 dict.bin"
         }
+
         var lastError = ""
-        for path in paths {
-            if MobileOpen(path, dataDirectory.path) {
+        for url in paths {
+            do {
+                // mappedIfSafe 让 18 MB 词表走 mmap，不整块复制进扩展内存。
+                let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                let dict = try Dict(data: data)
+                let eng = Engine(dict: dict)
+                let sess = Session(eng: eng)
+                sess.setLookbehind { [weak self] in self?.lastRune }
+                if !dataDirectory.path.isEmpty {
+                    eng.setFreq(
+                        Freq.load(dataDirectory.appendingPathComponent("freq.tsv").path))
+                    eng.setUserDict(
+                        UserDict.load(dataDirectory.appendingPathComponent("userdict.tsv").path))
+                    eng.setPhrases(
+                        UserDict.load(dataDirectory.appendingPathComponent("phrases.tsv").path))
+                }
+                engine = eng
+                session = sess
                 return nil
+            } catch {
+                lastError = String(describing: error)
             }
-            lastError = MobileLastError()
         }
         return lastError
     }
 
     /// 把词频和自造词里所有未落盘的改动写盘。
     func flush() {
-        let error = MobileFlush()
-        if !error.isEmpty {
-            bridgeLog.error("flush failed: \(error, privacy: .public)")
+        lock.lock()
+        defer { lock.unlock() }
+        do {
+            try session?.save(force: true)
+        } catch {
+            bridgeLog.error("flush failed: \(String(describing: error), privacy: .public)")
         }
     }
 
     /// 当前组合状态和模式，不执行动作。词表还没打开时返回 nil。
     func current() -> BridgeOutcome? {
-        MobileCurrent().map(Self.map)
+        lock.lock()
+        defer { lock.unlock() }
+        guard session != nil else { return nil }
+        return snapshot()
     }
 
-    func type(_ key: String) -> BridgeOutcome { call { MobileType(key) } }
-    func shiftLetter(_ key: String) -> BridgeOutcome { call { MobileShiftLetter(key) } }
-    func space() -> BridgeOutcome { call { MobileSpace() } }
-    func returnKey() -> BridgeOutcome { call { MobileReturn() } }
-    func backspace() -> BridgeOutcome { call(syncContext: false) { MobileBackspace() } }
-    func select(_ index: Int) -> BridgeOutcome { call { MobileSelect(index) } }
-    func selectChar(_ index: Int, last: Bool) -> BridgeOutcome { call { MobileSelectChar(index, last) } }
-    func selectGlobal(_ index: Int) -> BridgeOutcome { call { MobileSelectGlobal(index) } }
-    func punctuate(_ ch: String) -> BridgeOutcome { call { MobilePunctuate(ch) } }
-    func direct(_ text: String) -> BridgeOutcome { call { MobileDirect(text) } }
-    func toggleMode() -> BridgeOutcome { call { MobileToggleMode() } }
-    func toggleFullWidth() -> BridgeOutcome { call(syncContext: false) { MobileToggleFullWidth() } }
+    func type(_ key: String) -> BridgeOutcome {
+        call { $0.type(key.utf8.first ?? 0) }
+    }
+
+    func shiftLetter(_ key: String) -> BridgeOutcome {
+        call { $0.shiftLetter(key.utf8.first ?? 0) }
+    }
+
+    func space() -> BridgeOutcome {
+        call { $0.space() }
+    }
+
+    func returnKey() -> BridgeOutcome {
+        call { $0.returnKey() }
+    }
+
+    func backspace() -> BridgeOutcome {
+        call(syncContext: false) { $0.backspace() }
+    }
+
+    func select(_ index: Int) -> BridgeOutcome {
+        call { $0.select(index) }
+    }
+
+    func selectChar(_ index: Int, last: Bool) -> BridgeOutcome {
+        call { $0.selectChar(index, last: last) }
+    }
+
+    func selectGlobal(_ index: Int) -> BridgeOutcome {
+        call { $0.selectGlobal(index) }
+    }
+
+    func punctuate(_ ch: String) -> BridgeOutcome {
+        call { $0.punctuate(ch.utf8.first ?? 0) }
+    }
+
+    func direct(_ text: String) -> BridgeOutcome {
+        call { $0.direct(text) }
+    }
+
+    func toggleMode() -> BridgeOutcome {
+        call { $0.toggleMode() }
+    }
+
+    func toggleFullWidth() -> BridgeOutcome {
+        call(syncContext: false) { $0.toggleFullWidth() }
+    }
 
     func reset() {
-        MobileReset()
+        lock.lock()
+        defer { lock.unlock() }
+        session?.reset()
     }
 
     func allCandidates() -> [String] {
-        Self.parseCandidates(MobileAllCandidates())
+        lock.lock()
+        defer { lock.unlock() }
+        return session?.allCandidates.map(\.text) ?? []
     }
 
     /// 执行一次规则动作。可能上屏或补空格的动作先把最新正文推给规则层。
-    /// 词表还没打开时 Go 返回 nil，这里当作没消费。
-    private func call(syncContext: Bool = true, _ action: () -> MobileOutcome?) -> BridgeOutcome {
+    /// 词表还没打开时当作没消费。
+    private func call(syncContext: Bool = true, _ action: (Session) -> Result) -> BridgeOutcome {
         if syncContext {
-            MobileSetContextBefore(contextBefore())
+            setContextBefore(contextBefore())
         }
-        guard let outcome = action() else {
-            return BridgeOutcome(
-                text: "", preedit: "", candidates: [], consumed: false, isEnglish: false, fullWidth: true)
-        }
-        return Self.map(outcome)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let session else { return Self.empty }
+        let result = action(session)
+        // 和原来一样，词频攒够 50 次才写盘；失败不影响这次按键。
+        _ = try? session.save(force: false)
+        return snapshot(result.text, result.consumed)
     }
 
-    private static func map(_ outcome: MobileOutcome) -> BridgeOutcome {
-        BridgeOutcome(
-            text: outcome.text,
-            preedit: outcome.preedit,
-            candidates: parseCandidates(outcome.candidates),
-            consumed: outcome.consumed,
-            isEnglish: outcome.mode == 1,
-            fullWidth: outcome.fullWidth)
+    /// 更新光标前的正文。组合中正文末尾挂着预编辑串本身，要先去掉：
+    /// 动作里选词会消耗缓冲，到规则层读光标前字符时预编辑已经变了。
+    private func setContextBefore(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let session else { return }
+        var trimmed = text
+        let preedit = session.preedit
+        if !preedit.isEmpty, trimmed.hasSuffix(preedit) {
+            trimmed = String(trimmed.dropLast(preedit.count))
+        }
+        lastRune = trimmed.unicodeScalars.last
     }
 
-    /// gomobile 不支持 []string，Go 侧用 U+001F 拼接候选。按 UTF-16 切，
-    /// 不按字素簇切，"\r\n" 之类的组合也不会把下标切错位。
-    private static func parseCandidates(_ joined: String) -> [String] {
-        joined.isEmpty ? [] : joined.components(separatedBy: "\u{1F}")
+    private func snapshot(_ text: String = "", _ consumed: Bool = false) -> BridgeOutcome {
+        guard let session else { return Self.empty }
+        return BridgeOutcome(
+            text: text,
+            preedit: session.preedit,
+            candidates: session.candidates.map(\.text),
+            consumed: consumed,
+            isEnglish: session.currentMode == .english,
+            fullWidth: session.isFullWidth)
     }
 }

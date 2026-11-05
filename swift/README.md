@@ -57,6 +57,7 @@ swift test -c release --filter RealDictTests
   + 空格 → 第二页首选；数字选词；回车原样上屏；`[` 取首字；`ni` + Shift+A +
   空格 → `niA `；Esc 取消组合。
 - 升级后重新选中自己（客户端重连）正常。
+- iOS 键盘扩展直接链接 `WenshanCore`；无头模拟器里点 `nihk` + 空格上屏「你好」。
 
 ## 回退到 Go 版
 
@@ -78,5 +79,5 @@ sh scripts/repair.sh
 
 ## 和 Go 版的关系
 
-macOS 默认已经是 Swift 版。Go 版源码保留在根目录，用于回退；iOS 键盘仍是 Go 内核
-+ gomobile，规则层暂时没有共用。
+macOS 默认已经是 Swift 版。Go 版源码保留在根目录，用于回退；iOS 键盘也已经改用
+`WenshanCore`，不再走 gomobile。

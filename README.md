@@ -58,8 +58,8 @@ Go 版源码仍在根目录，`sh scripts/install.sh` 可以重新装回 Go 版�
 
 ## iOS
 
-`ios/` 下是 Go 内核 + Swift 6 键盘扩展，复用同一个 `engine/` 和 `input/`
-规则层。已接通 App Group 词表部署、候选条编码区、中英切换、Shift、符号页、按键预览、
+`ios/` 下是 Swift 6 键盘扩展，直接复用 `swift/Sources/WenshanCore` 的规则层。
+已接通 App Group 词表部署、候选条编码区、中英切换、Shift、符号页、按键预览、
 删除连发、空格拖光标和 iPad 分档布局，以及用户词频/自造词/短语加载；仍在模拟器验证
 阶段，真机内存和发布化未完成。构建、无头模拟器验证和已知限制见
 [ios/README.md](ios/README.md)。
@@ -98,7 +98,7 @@ Go 版源码仍在根目录，`sh scripts/install.sh` 可以重新装回 Go 版�
 ```
 swift/Sources/WenshanCore      Swift 规则层：自然码、词表、组句、纠错、词频、输入规则
 swift/Sources/WenshanSwift     Swift macOS 壳：IMK 注册、按键处理、候选窗、输入源
-engine/ input/                 Go 规则层（iOS 键盘仍在使用，macOS 版回退用）
+engine/ input/                 Go 规则层（macOS 版回退用；iOS 已改用 Swift）
 main/imk/tis/objc/candidate    Go 版 macOS 壳（回退用）
 cmd/dictgen                    Rime 词表 → dict.bin
 cmd/icon、tisprobe、swap        图标生成、输入源诊断、原子交换 Contents
@@ -152,7 +152,7 @@ sh scripts/repair.sh
 ## 实现
 
 macOS 版是 `swift/` 下的 Swift 实现，bundle id 与旧 Go 版相同，安装后系统里仍是
-「文山」。Go 版源码保留在根目录，用于回退和 iOS 键盘。结构、构建和验证见
+「文山」。Go 版源码保留在根目录，用于回退。结构、构建和验证见
 [swift/README.md](swift/README.md)。
 
 ## 许可

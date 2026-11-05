@@ -5,6 +5,10 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+packages:
+  WenshanCore:
+    path: ../swift
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -90,8 +94,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_ENTITLEMENTS: WenshanKeyboard/WenshanKeyboard.entitlements
     dependencies:
-      - framework: build/WenshanEngine.xcframework
-        embed: false
+      - package: WenshanCore
+        product: WenshanCore
 
 schemes:
   WenshanHost:

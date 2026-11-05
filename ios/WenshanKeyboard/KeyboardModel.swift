@@ -84,13 +84,14 @@ final class KeyboardModel {
         }
     }
 
-    /// 后台打开词表。失败后再次出现时允许重试。
+    /// 后台打开词表。失败后再次出现时允许重试。桥接层自己加锁。
     func load(dataDirectory: URL) async {
         guard phase != .ready, !isLoading else { return }
         isLoading = true
         phase = .loading
+        let bridge = self.bridge
         let error = await Task.detached(priority: .userInitiated) {
-            WenshanBridge.open(dataDirectory: dataDirectory)
+            bridge.open(dataDirectory: dataDirectory)
         }.value
         isLoading = false
         if let error {
@@ -226,7 +227,7 @@ final class KeyboardModel {
         return apply(bridge.toggleFullWidth())
     }
 
-    /// 清空当前组合，不删除已经上屏的文本。加载中不碰 Go 侧：Open 持锁读词表，
+    /// 清空当前组合，不删除已经上屏的文本。加载中不碰规则层：打开词表持锁，
     /// 主线程会一直等到加载结束。
     func reset() {
         if phase == .ready {

@@ -1,5 +1,5 @@
 #!/bin/sh
-# 构建 iOS 模拟器版：Go 引擎 -> XCFramework -> Xcode 工程。
+# 构建 iOS 模拟器版：Swift 规则层 + Xcode 工程。
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -12,12 +12,8 @@ fi
 
 mkdir -p ios/build
 cp dict.bin ios/build/dict.bin
-
-# gomobile 和 gobind 都装在 GOPATH/bin 下。
-PATH="$(go env GOPATH)/bin:$PATH" gomobile bind \
-    -target=ios \
-    -o ios/build/WenshanEngine.xcframework \
-    ./ios/mobile
+# 清掉旧的 gomobile 产物，工程已经不再引用它。
+rm -rf ios/build/WenshanEngine.xcframework
 
 cd ios
 go run ../cmd/icon -ios-out WenshanHost/Assets.xcassets/AppIcon.appiconset/AppIcon.png
