@@ -11,7 +11,7 @@ final class Log {
 
     private init() {
         let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/WenshanSwift.log")
+            .appendingPathComponent("Library/Logs/Wenshan.log")
         FileManager.default.createFile(atPath: url.path, contents: nil)
         handle = try? FileHandle(forWritingTo: url)
         handle?.seekToEndOfFile()

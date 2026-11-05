@@ -9,7 +9,7 @@ private struct UnsafeBox<T>: @unchecked Sendable {
 
 /// Info.plist 里的 InputMethodServerControllerClass 指向这个 ObjC 类名。
 /// IMK 在每次输入会话时创建一个实例，状态统一放在 AppState。
-@objc(WenshanSwiftInputController)
+@objc(WenshanInputController)
 final class InputController: IMKInputController {
     override func handle(_ event: NSEvent, client sender: Any!) -> Bool {
         guard let client = sender as? any IMKTextInput else { return false }

@@ -2,14 +2,15 @@
 
 <h1>文山输入法<br clear="right"></h1>
 
-macOS 上的双拼输入法，另有 iOS 键盘扩展。键位为自然码。纯 Go 实现，无 cgo，也不依赖 librime 之类的
-输入法引擎：词表在构建时编译进可执行文件，每次按键只是一次二分查找。
+macOS 上的双拼输入法，另有 iOS 键盘扩展。键位为自然码。macOS 版是 Swift 实现，
+规则层移植自同仓库的 Go 版；不依赖 librime 之类的输入法引擎，词表在构建时编译进
+app，每次按键只是一次二分查找。
 
 ## 特性
 
 - **轻快**：单进程，按键处理不跨进程；词表按编码排序，二分定位。真实词表上每次按键
-  （查词 + 组句 + 纠错）在 M3 上约 5–30 µs，见 `go test ./engine -bench RealDict`。
-- **零外部依赖**：不用 librime，不用 CMake，`go build` 即可构建；词表打包进二进制，装完即用。
+  （查词 + 组句 + 纠错）Go 版约 5–30 µs，Swift 版 release 约 50–125 µs，都远低于一帧。
+- **零外部依赖**：不用 librime，不用 CMake；macOS 版 `swift build` 即可构建，词表打包进 app。
 - **双拼自然码**：每音节两键，支持一级简码（`l`→了、`w`→我、`d`→的、`b`→不、`n`→你）。
 - **单字辅码**：单字两键后可再打 1-2 位部首辅码，`ni` → `nir` → `nirx`，同音字不用翻。
 - **候选翻页**：一页 9 个，`=` / `-` 或 PageDown / PageUp 翻页，最多 20 页；候选窗开着时
@@ -26,26 +27,34 @@ macOS 上的双拼输入法，另有 iOS 键盘扩展。键位为自然码。纯
 ## 安装
 
 ```sh
-sh scripts/install.sh
+sh swift/scripts/install.sh
 ```
 
-首次会下载 rime-ice 词库并编译成 `dict.bin`（约 17 MB，已 gitignore）。
+首次会下载 rime-ice 词库并编译成 `dict.bin`（约 17 MB，已 gitignore）。脚本把 Swift
+版装成默认的「文山」，沿用原来的 bundle id、输入源和
+`~/Library/Application Support/Wenshan` 下的词频/短语。目标位置还是 Go 版时，会先
+备份到 `~/Library/Application Support/Wenshan/backup/Wenshan-go.app`。
 
-签名默认用 ad-hoc（`-`）。用本机开发者证书签名可以让系统把每次构建当成同一个应用，
-「允许启用」的授权不会每次重置：
+签名默认用 ad-hoc。用本机开发者证书可以让系统把每次构建当成同一个应用，「允许启用」
+的授权不会每次重置：
 
 ```sh
-CODESIGN_IDENTITY="Apple Development: 你的名字 (XXXXXXXXXX)" sh scripts/install.sh
+CODESIGN_IDENTITY="Apple Development: 你的名字 (XXXXXXXXXX)" sh swift/scripts/install.sh
 ```
 
-然后在 **系统设置 → 键盘 → 输入源 → + → 中文（简体）→ 文山** 添加，
-点「允许」授权，Control-空格 切换。
+首次安装需要在 **系统设置 → 键盘 → 输入源 → + → 中文（简体）→ 文山** 添加并点
+「允许」。已经添加过的机器直接覆盖安装，输入源不变，Control-空格 切换。
 
 卸载：
 
 ```sh
 pkill -f "Input Methods/Wenshan.app"; rm -rf ~/Library/Input\ Methods/Wenshan.app
 ```
+
+### Go 版（回退用）
+
+Go 版源码仍在根目录，`sh scripts/install.sh` 可以重新装回 Go 版；它会覆盖同一个
+`Wenshan.app`，输入源 ID 不变。
 
 ## iOS
 
@@ -82,18 +91,18 @@ pkill -f "Input Methods/Wenshan.app"; rm -rf ~/Library/Input\ Methods/Wenshan.ap
 
 ## 实现原理
 
-一次按键的路径：IMKServer 收到事件 → `imk_darwin.go` 分类按键 → `engine` 查词表、
-组句 → `candidate_darwin.go` 刷新候选窗 → 写回预编辑。全程不跨进程，剩下的耗时是
-前台应用排版预编辑串，任何输入法都一样。
+一次按键的路径：IMKServer 收到事件 → `InputController` → `AppState` 分类按键 →
+`WenshanCore` 查词表、组句 → `CandidateWindow` 刷新候选窗 → 写回预编辑。全程不跨
+进程，剩下的耗时是前台应用排版预编辑串，任何输入法都一样。
 
 ```
-main/imk/tis/objc/candidate    macOS 输入法壳：IMK 注册、按键处理、候选窗、输入源管理
-engine/                        自然码键位、词表二分查找、组句、词频、自造词
-input/                         macOS/iOS 共用的输入规则：标点、中英模式、Shift、
-                               临时英文、空格/回车/退格、中英文自动补空格
+swift/Sources/WenshanCore      Swift 规则层：自然码、词表、组句、纠错、词频、输入规则
+swift/Sources/WenshanSwift     Swift macOS 壳：IMK 注册、按键处理、候选窗、输入源
+engine/ input/                 Go 规则层（iOS 键盘仍在使用，macOS 版回退用）
+main/imk/tis/objc/candidate    Go 版 macOS 壳（回退用）
 cmd/dictgen                    Rime 词表 → dict.bin
-cmd/icon、tisprobe、swap        图标生成、输入源诊断、安装时原子交换 Contents
-packaging/ scripts/            Info.plist 与本地化资源；构建、安装、修复脚本
+cmd/icon、tisprobe、swap        图标生成、输入源诊断、原子交换 Contents
+packaging/ scripts/            Go 版 Info.plist、构建/安装/修复脚本
 ```
 
 词表流水线：`scripts/fetch-dict.sh` 下载 rime-ice 的 `8105` + `base` + `others`
@@ -140,10 +149,11 @@ sh scripts/repair.sh
 - 临时英文从已有拼音缓冲开始，首字母大写的混合大小写词（`GitHub`、`MacBook`）要用短语或切英文。
 - 英文模式只在当前进程内有效。
 
-## Swift 版（进行中）
+## 实现
 
-`swift/` 下是规则层和 macOS 壳的 Swift 移植，独立 bundle id，和 Go 版并存。
-构建、安装和验证情况见 [swift/README.md](swift/README.md)。
+macOS 版是 `swift/` 下的 Swift 实现，bundle id 与旧 Go 版相同，安装后系统里仍是
+「文山」。Go 版源码保留在根目录，用于回退和 iOS 键盘。结构、构建和验证见
+[swift/README.md](swift/README.md)。
 
 ## 许可
 

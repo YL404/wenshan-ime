@@ -1,42 +1,69 @@
 #!/bin/sh
-# 装到 ~/Library/Input Methods，和 Go 版并存。
+# 把 Swift 版装成默认的「文山」：沿用 Go 版的 bundle id、安装路径和用户数据。
+# 原来的 Go 版会备份到 ~/Library/Application Support/Wenshan/backup/。
 set -eu
 cd "$(dirname "$0")/../.."
 [ -n "${HOME:-}" ] || { echo "HOME 未设置" >&2; exit 1; }
 
 sh swift/scripts/build.sh
 
-dest="$HOME/Library/Input Methods/WenshanSwift.app"
+dest="$HOME/Library/Input Methods/Wenshan.app"
+old="$HOME/Library/Input Methods/WenshanSwift.app"
+backup="$HOME/Library/Application Support/Wenshan/backup/Wenshan-go.app"
 mkdir -p "$HOME/Library/Input Methods"
-# 等旧实例真正退出：pkill 是异步的，抢在它前面启动会注册不上 IMK 连接。
-pkill -f "$dest/Contents/MacOS/WenshanSwift" 2>/dev/null || true
+
+# 目标还是 Go 版时备份一次；Swift 版带 .swift 标记，重复安装不会反复备份。
+if [ -d "$dest" ] && [ ! -f "$dest/Contents/Resources/.swift" ] && [ ! -e "$backup" ]; then
+	mkdir -p "$(dirname "$backup")"
+	cp -R "$dest" "$backup"
+	echo "已备份 Go 版: $backup"
+fi
+
+# 清掉之前并存测试用的独立 Swift 版和它的输入源。
+if [ -d "$old" ]; then
+	build/Wenshan.app/Contents/MacOS/Wenshan \
+		--disable im.wenshan.inputmethod.WenshanSwift.Hans >/dev/null 2>&1 || true
+	build/Wenshan.app/Contents/MacOS/Wenshan \
+		--disable im.wenshan.inputmethod.WenshanSwift >/dev/null 2>&1 || true
+	pkill -f "$old/Contents/MacOS/WenshanSwift" 2>/dev/null || true
+	rm -rf "$old"
+fi
+
+# 替换期间先切到 ABC，别让系统还连着旧进程。
+build/Wenshan.app/Contents/MacOS/Wenshan --select com.apple.keylayout.ABC >/dev/null 2>&1 || true
+
+pkill -f "$dest/Contents/MacOS/Wenshan" 2>/dev/null || true
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-	pgrep -f "$dest/Contents/MacOS/WenshanSwift" >/dev/null 2>&1 || break
+	pgrep -f "$dest/Contents/MacOS/Wenshan" >/dev/null 2>&1 || break
 	sleep 0.2
 done
 
 # 只换 Contents，用 renamex_np(RENAME_SWAP) 原子交换，避免 bundle 出现
 # 不完整的窗口，LaunchServices 会认为应用被卸载。
 if [ -d "$dest/Contents" ]; then
-	stage="$HOME/Library/Input Methods/.WenshanSwift.stage"
+	stage="$HOME/Library/Input Methods/.Wenshan.stage"
 	rm -rf "$stage"
 	mkdir -p "$stage"
-	cp -R build/WenshanSwift.app/Contents "$stage/Contents"
-	build/WenshanSwift.app/Contents/MacOS/WenshanSwift --swap \
+	cp -R build/Wenshan.app/Contents "$stage/Contents"
+	build/Wenshan.app/Contents/MacOS/Wenshan --swap \
 		"$stage/Contents" "$dest/Contents"
 	rm -rf "$stage"
 else
 	rm -rf "$dest"
-	cp -R build/WenshanSwift.app "$dest"
+	cp -R build/Wenshan.app "$dest"
 fi
 
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
 	-f "$dest" >/dev/null 2>&1 || true
-"$dest/Contents/MacOS/WenshanSwift" --register "$dest" >/dev/null 2>&1 || true
+"$dest/Contents/MacOS/Wenshan" --register "$dest" >/dev/null 2>&1 || true
 
 # 让系统重新认识这个 bundle，并重启 IMK 的两个常驻代理。
 killall imklaunchagent TextInputSwitcher 2>/dev/null || true
+sleep 1
+
+# 输入源还是 im.wenshan.inputmethod.Wenshan.Hans，只是背后的程序换成了 Swift。
+"$dest/Contents/MacOS/Wenshan" --select im.wenshan.inputmethod.Wenshan.Hans >/dev/null 2>&1 || true
 
 echo "已安装: $dest"
-echo "首次安装需要在 系统设置 → 键盘 → 输入源 里添加「文山 Swift」并点允许。"
-echo "日志: ~/Library/Logs/WenshanSwift.log"
+echo "输入源仍是「文山」，用户词频和短语沿用 ~/Library/Application Support/Wenshan。"
+echo "日志: ~/Library/Logs/Wenshan.log"

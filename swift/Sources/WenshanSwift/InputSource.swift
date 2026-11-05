@@ -9,24 +9,38 @@ func registerInputSource(_ path: String) -> Int32 {
     return TISRegisterInputSource(url)
 }
 
-/// 输入法进程重启后，前台 App 仍然握着上一个实例的连接，按键会直接透传。
-/// 新实例起来后重新选中自己，逼 IMK 把客户端重新接上。
+/// 按输入源 ID 选中。找不到返回 -1。
 @MainActor
-func selectOwnInputSource(_ modeID: String) {
+func selectInputSource(_ wanted: String) -> Int32 {
     guard let list = TISCreateInputSourceList(nil, true)?.takeRetainedValue() as? [TISInputSource]
-    else { return }
+    else { return -1 }
     for source in list {
         guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
             continue
         }
         let id = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
-        if id == modeID {
-            let rc = TISSelectInputSource(source)
-            Log.shared.write("重新选中输入源 \(modeID) -> \(rc)")
-            return
+        if id == wanted {
+            return TISSelectInputSource(source)
         }
     }
-    Log.shared.write("没有找到输入源 \(modeID)")
+    return -1
+}
+
+/// 从输入源列表里移除。迁移时用来清掉旧的独立 Swift 版。
+@MainActor
+func disableInputSource(_ wanted: String) -> Int32 {
+    guard let list = TISCreateInputSourceList(nil, true)?.takeRetainedValue() as? [TISInputSource]
+    else { return -1 }
+    for source in list {
+        guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
+            continue
+        }
+        let id = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+        if id == wanted {
+            return TISDisableInputSource(source)
+        }
+    }
+    return 0
 }
 
 /// 原子交换两个目录，安装时只换 Contents，避免 bundle 出现不完整的窗口。

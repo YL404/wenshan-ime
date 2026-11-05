@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>TISInputSourceID</key>
-	<string>im.wenshan.inputmethod.WenshanSwift</string>
+	<string>im.wenshan.inputmethod.Wenshan</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh-Hans</string>
 	<key>CFBundleDisplayName</key>
-	<string>文山 Swift</string>
+	<string>文山</string>
 	<key>CFBundleIconFile</key>
 	<string>Wenshan.icns</string>
 	<key>tsInputMethodIconFileKey</key>
@@ -19,21 +19,21 @@
 	<key>TISIntendedLanguage</key>
 	<string>zh-Hans</string>
 	<key>CFBundleExecutable</key>
-	<string>WenshanSwift</string>
+	<string>Wenshan</string>
 	<key>CFBundleIdentifier</key>
-	<string>im.wenshan.inputmethod.WenshanSwift</string>
+	<string>im.wenshan.inputmethod.Wenshan</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>WenshanSwift</string>
+	<string>Wenshan</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1</string>
+	<string>0.9.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>16</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>LSUIElement</key>
@@ -46,10 +46,10 @@
 	<dict>
 		<key>tsInputModeListKey</key>
 		<dict>
-			<key>im.wenshan.inputmethod.WenshanSwift.Hans</key>
+			<key>im.wenshan.inputmethod.Wenshan.Hans</key>
 			<dict>
 				<key>TISInputSourceID</key>
-				<string>im.wenshan.inputmethod.WenshanSwift.Hans</string>
+				<string>im.wenshan.inputmethod.Wenshan.Hans</string>
 				<key>TISIntendedLanguage</key>
 				<string>zh-Hans</string>
 				<key>tsInputModeCharacterRepertoireKey</key>
@@ -72,14 +72,14 @@
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
 		<array>
-			<string>im.wenshan.inputmethod.WenshanSwift.Hans</string>
+			<string>im.wenshan.inputmethod.Wenshan.Hans</string>
 		</array>
 	</dict>
 	<key>InputMethodConnectionName</key>
-	<string>im.wenshan.inputmethod.WenshanSwift.Connection</string>
+	<string>im.wenshan.inputmethod.Wenshan.Connection</string>
 	<key>InputMethodServerControllerClass</key>
-	<string>WenshanSwiftInputController</string>
+	<string>WenshanInputController</string>
 	<key>InputMethodServerDelegateClass</key>
-	<string>WenshanSwiftInputController</string>
+	<string>WenshanInputController</string>
 </dict>
 </plist>

@@ -1,5 +1,6 @@
 #!/bin/sh
-# 编译 WenshanSwift.app：Swift 可执行文件 + Info.plist + 词表 + 图标。
+# 编译 Wenshan.app：Swift 可执行文件 + Info.plist + 词表 + 图标。
+# 和 Go 版使用同一个 bundle id 和安装路径，装上去就是「文山」。
 set -eu
 cd "$(dirname "$0")/../.."
 
@@ -12,13 +13,15 @@ fi
 
 swift build -c release --package-path swift --product WenshanSwift
 
-app=build/WenshanSwift.app
+app=build/Wenshan.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp swift/.build/release/WenshanSwift "$app/Contents/MacOS/WenshanSwift"
+cp swift/.build/release/WenshanSwift "$app/Contents/MacOS/Wenshan"
 cp swift/Resources/Info.plist "$app/Contents/Info.plist"
 cp dict.bin "$app/Contents/Resources/dict.bin"
 cp -R swift/Resources/zh-Hans.lproj swift/Resources/en.lproj "$app/Contents/Resources/"
+# 标记这是 Swift 版，安装脚本据此判断要不要备份原来的 Go 版。
+: > "$app/Contents/Resources/.swift"
 
 # 图标复用 Go 版的生成器；产物已经在就直接拷。
 if [ ! -f build/Wenshan.iconset/icon_512x512@2x.png ] ||
@@ -39,5 +42,5 @@ rm -f build/.menu-swift-1x.tiff build/.menu-swift-2x.tiff
 
 printf 'APPL????' > "$app/Contents/PkgInfo"
 codesign --force --sign "${CODESIGN_IDENTITY:--}" \
-	--identifier im.wenshan.inputmethod.WenshanSwift "$app"
+	--identifier im.wenshan.inputmethod.Wenshan "$app"
 echo "已生成 $app"
