@@ -10,3 +10,6 @@ ios/WenshanKeyboard/Info.plist
 
 # 本地 agent skill 软链，指向本机路径
 .agents/
+
+# Swift Package 构建产物
+swift/.build/
