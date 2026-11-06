@@ -45,6 +45,16 @@ public final class Engine {
     /// 挂上只读的自定义短语表。它和自造词共用格式，但不会被写回。
     public func setPhrases(_ p: UserDict) { phrases = p }
 
+    /// 词频、自造词或短语文件被别的进程改过或删掉时（主 App 清空学习记录、
+    /// 用户手动删文件、另一个键盘进程写过），丢掉内存里的副本重新读盘，
+    /// 否则下次写盘会把已清空的内容原样写回去。磁盘为准：未落盘的改动不保留，
+    /// 调用方应在会话之间（已经 save 过之后）调用。
+    public func reloadIfChangedOnDisk() {
+        if let f = freq, f.changedOnDisk { freq = Freq.load(f.path) }
+        if let u = user, u.changedOnDisk { user = UserDict.load(u.path) }
+        if let p = phrases, p.changedOnDisk { phrases = UserDict.load(p.path) }
+    }
+
     /// 把用户词频和自造词写回磁盘。force 为 false 时词频攒够次数才写，
     /// force 为 true 时只要有改动就写。
     public func save(force: Bool) throws {

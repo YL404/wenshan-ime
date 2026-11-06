@@ -169,6 +169,9 @@ final class AppState {
 
     func activate(_ sender: Any?) {
         session.reset()
+        // 停用时已经写过盘；这期间文件被删或被改（README 里「删掉文件即清空」），
+        // 以磁盘为准重新读，免得下次写盘把旧内容写回去。
+        session.reloadIfChangedOnDisk()
         caretValid = false
         shiftDown = false
         shiftUsed = false

@@ -14,6 +14,8 @@ public final class UserDict {
     var entries: [Entry]
     var dirty: Int
     let path: String
+    /// 上次读入或写出时文件的修改时间，用来发现别的进程改过它。
+    var diskStamp: Date?
 
     public init(path: String) {
         self.entries = []
@@ -31,6 +33,7 @@ public final class UserDict {
     /// 每行是「编码<TAB>文本」，空行和 # 开头的行忽略。
     public static func load(_ path: String) -> UserDict {
         let u = UserDict(path: path)
+        u.diskStamp = fileStamp(path)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return u }
         for line in textLines(String(decoding: data, as: UTF8.self)) {
             if line.isEmpty || line.hasPrefix("#") { continue }
@@ -85,5 +88,11 @@ public final class UserDict {
         }
         try out.write(to: url, atomically: true, encoding: .utf8)
         dirty = 0
+        diskStamp = fileStamp(path)
+    }
+
+    /// 文件在上次读写之后被别的进程改过或删掉。
+    var changedOnDisk: Bool {
+        !path.isEmpty && fileStamp(path) != diskStamp
     }
 }

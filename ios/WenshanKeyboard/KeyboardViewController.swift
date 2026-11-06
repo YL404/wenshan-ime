@@ -52,6 +52,8 @@ final class KeyboardViewController: UIInputViewController {
         selectionFeedback.prepare()
         if model.phase != .ready {
             loadEngine()
+        } else {
+            model.reloadUserDataIfChanged()
         }
         setOverlay(.none)
         layer = .letters

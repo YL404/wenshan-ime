@@ -81,6 +81,11 @@ public final class Session {
         try eng?.save(force: force)
     }
 
+    /// 用户数据文件被外部改过时重新读盘，见 Engine.reloadIfChangedOnDisk。
+    public func reloadIfChangedOnDisk() {
+        eng?.reloadIfChangedOnDisk()
+    }
+
     func result(_ text: String, _ consumed: Bool) -> Result {
         Result(text: text, consumed: consumed, mode: mode, fullWidth: fullWidth)
     }

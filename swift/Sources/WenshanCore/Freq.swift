@@ -14,6 +14,8 @@ public final class Freq {
     var counts: [String: UInt32]
     var dirty: Int
     let path: String
+    /// 上次读入或写出时文件的修改时间，用来发现别的进程改过它。
+    var diskStamp: Date?
 
     public init(counts: [String: UInt32] = [:], path: String = "") {
         self.counts = counts
@@ -24,6 +26,7 @@ public final class Freq {
     /// 读取词频文件。文件不存在或读不动时返回空表，不影响输入。
     public static func load(_ path: String) -> Freq {
         let f = Freq(path: path)
+        f.diskStamp = fileStamp(path)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return f }
         for line in textLines(String(decoding: data, as: UTF8.self)) {
             let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
@@ -76,6 +79,12 @@ public final class Freq {
         }
         try out.write(to: url, atomically: true, encoding: .utf8)
         dirty = 0
+        diskStamp = fileStamp(path)
+    }
+
+    /// 文件在上次读写之后被别的进程改过或删掉。
+    var changedOnDisk: Bool {
+        !path.isEmpty && fileStamp(path) != diskStamp
     }
 
     /// text 的词频加权。封顶是为了不让个别词永远霸榜，同时也保证它只影响
@@ -96,6 +105,12 @@ public final class Freq {
 @inline(__always)
 func freqBoost(_ n: UInt32) -> Int64 {
     Int64(min(n, maxBoostCount)) * boostPerPick
+}
+
+/// 文件的修改时间，文件不存在时为 nil。不走 URL 的资源缓存，每次都问文件系统。
+func fileStamp(_ path: String) -> Date? {
+    guard !path.isEmpty else { return nil }
+    return (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
 }
 
 /// 按行切分，等价于 Go 的 bufio.Scanner：去掉行尾的 \n，也去掉 \r\n 里的 \r。

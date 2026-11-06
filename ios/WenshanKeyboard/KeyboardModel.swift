@@ -244,6 +244,12 @@ final class KeyboardModel {
         bridge.flush()
     }
 
+    /// 用户数据文件被外部改过时重新读盘。
+    func reloadUserDataIfChanged() {
+        guard phase == .ready else { return }
+        bridge.reloadUserDataIfChanged()
+    }
+
     private func direct(_ key: String) -> KeyboardOutcome {
         let text = shift.isActive ? key.uppercased() : key
         if shift == .once { shift = .off }

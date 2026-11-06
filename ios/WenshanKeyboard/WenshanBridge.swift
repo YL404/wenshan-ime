@@ -82,6 +82,14 @@ final class WenshanBridge: @unchecked Sendable {
         }
     }
 
+    /// 键盘再次出现时调用：主 App 清空了学习记录、或另一个键盘进程写过文件，
+    /// 就重新读盘。收起时已经 flush 过，不会丢掉本进程的改动。
+    func reloadUserDataIfChanged() {
+        lock.lock()
+        defer { lock.unlock() }
+        session?.reloadIfChangedOnDisk()
+    }
+
     /// 当前组合状态和模式，不执行动作。词表还没打开时返回 nil。
     func current() -> BridgeOutcome? {
         lock.lock()
