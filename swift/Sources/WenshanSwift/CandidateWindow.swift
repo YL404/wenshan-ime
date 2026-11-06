@@ -227,14 +227,17 @@ final class CandidateWindow {
         let height = maxH + 2 * candOuter
         panel.setContentSize(NSSize(width: width, height: height))
 
-        // 光标下方放不下就翻到上方。
+        // 光标下方放不下就翻到上方。「放不下」按光标所在屏幕的可用区域算：
+        // Dock 在底部或副屏不从 0 开始时，和 0 比会判成放得下，再被下面的
+        // 边界修正推回来盖住正在输入的那一行。
+        let screen = screenFrame(at: NSPoint(x: caret.minX, y: caret.minY))
         var top = caret.minY - 4
-        if top - height < 0 {
+        if top - height < (screen?.minY ?? 0) {
             top = caret.minY + caret.height + height + 4
         }
         // 贴着屏幕边缘时收回来，别让候选条跑到屏幕外面。
         var point = NSPoint(x: caret.minX, y: top)
-        if let screen = screenFrame(at: NSPoint(x: caret.minX, y: caret.minY)) {
+        if let screen {
             if point.x + width > screen.maxX { point.x = screen.maxX - width }
             if point.x < screen.minX { point.x = screen.minX }
             if point.y > screen.maxY { point.y = screen.maxY }
