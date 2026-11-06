@@ -6,7 +6,8 @@ import WenshanCore
 ///
 /// 外观：面板底是 .clear 样式的液态玻璃（NSGlassEffectView），每个候选是一个
 /// 独立的圆角色块，选中的那个铺实心强调色。文字统一用白色，序号和箭头用
-/// 半透明白。同一个面板也用来显示模式提示（中文/英文/全角/半角）。
+/// 半透明白；玻璃再压一层 30% 的黑，白字落在白色页面上也有对比度。
+/// 同一个面板也用来显示模式提示（中文/英文/全角/半角）。
 @MainActor
 final class CandidateWindow {
     private struct Chip {
@@ -67,6 +68,9 @@ final class CandidateWindow {
         panel.hidesOnDeactivate = false
 
         glass.style = .clear
+        // .clear 几乎全透，白字落到白色页面上就没了。压一层 30% 的黑兜底，
+        // 深浅背景都能看清，玻璃仍保持透明。
+        glass.tintColor = NSColor.black.withAlphaComponent(0.3)
         glass.cornerRadius = candRadius
         glass.contentView = content
         panel.contentView = glass
