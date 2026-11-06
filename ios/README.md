@@ -5,7 +5,7 @@ Swift 规则层 + Swift 6 键盘扩展。直接复用 `swift/Sources/WenshanCore
 当前可用：26 键自然码、空闲工具栏/输入候选两态顶栏、候选词块与全量候选展开、长按候选取首/尾字、
 首选上屏、Shift 一次性大写与双击锁定、中英切换、临时英文、数字九宫格、分类符号面板与长按符号、
 `returnKeyType` 标题与高亮、收起键盘、按键预览与按下缩放、删除长按连发/滑动删除、空格长按拖光标、
-快速连打顺序队列、触感（需完全访问）、iPad 分档/浮动高度、App Group 词表、用户词频/自造词/短语
+快速连打顺序队列、触感（需完全访问）、iPad 分档/浮动高度、用户词频/自造词/短语
 加载。地球键只在系统要求切换输入模式时出现。标点、全半角、Shift、临时英文和自动补空格与 macOS
 共用 `swift/Sources/WenshanCore`，iOS 只保留触摸按键和渲染。
 
@@ -21,8 +21,7 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
 - `Shared/AppGroup.swift`：App Group 标识和共享目录路径。
 - `WenshanHost/`：宿主 App。
   - `Assets.xcassets`：App 图标。`cmd/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
-  - `DictDeployer.swift`：把扩展 Bundle 里的 `dict.bin` 原子部署到 App Group。
-  - `ContentView.swift`：启用说明、词表状态、用户数据统计/清空、测试输入框。
+  - `ContentView.swift`：启用说明、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
   - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开词表在
     后台，其余按键在主线程，一把锁串起来。光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
@@ -38,16 +37,13 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
 ## 数据流
 
 ```
-WenshanHost
-  └─ 部署 dict.bin → App Group: group.im.wenshan.ios
-                              ├─ dict.bin
-                              └─ Data/
-                                   ├─ freq.tsv
-                                   ├─ userdict.tsv
-                                   └─ phrases.tsv
+App Group: group.im.wenshan.ios
+  └─ Data/
+       ├─ freq.tsv
+       ├─ userdict.tsv
+       └─ phrases.tsv
 WenshanKeyboard
-  ├─ 优先读 App Group 词表，失败回退扩展 Bundle
-  ├─ 引擎 mmap 词表，不整块复制
+  ├─ 直接 mmap 扩展 Bundle 里的 dict.bin，随 App 一起更新，不整块复制
   └─ 用户数据写共享目录；没有完全访问时退回扩展 Documents
 ```
 
@@ -120,7 +116,7 @@ function run([udid, developerDir]) {
 
 Go 版之前在模拟器（iPhone 18 Pro，iOS 27.2，Debug）实测：键盘扩展启动约 30 MB，
 完成一次上屏约 32 MB，50 次连续上屏后约 23 MB，收起键盘后回落到约 20 MB；
-词表通过 App Group 文件 mmap，没有整块读入内存。Swift 版换了规则层，这组数字需要
+词表通过文件 mmap，没有整块读入内存。Swift 版换了规则层，这组数字需要
 重新测；结构上仍是 mmap 词表，预计同一量级。
 
 模拟器不执行键盘扩展的 jetsam 上限。真机 Release 构建仍需用 Instruments 测冷启动、
@@ -133,4 +129,4 @@ Go 版之前在模拟器（iPhone 18 Pro，iOS 27.2，Debug）实测：键盘扩
 - 用户数据只在本地；没有 iCloud/WebDAV 同步。`phrases.tsv` 目前需要手动放到
   App Group 的 `Data/` 下，宿主还没有短语编辑器。
 - 没有 App Group 的免费签名会退回扩展自己的 Documents，主 App 看不到学习记录。
-- 词表 18 MB，仍打包在扩展 Bundle 里作为首次部署的回退；App 体积和扩展内存是两回事。
+- 词表约 17 MB，打包在扩展 Bundle 里；App 体积和扩展内存是两回事。

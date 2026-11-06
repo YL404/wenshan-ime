@@ -34,8 +34,8 @@ final class WenshanBridge: @unchecked Sendable {
         text: "", preedit: "", candidates: [], consumed: false, isEnglish: false,
         fullWidth: true)
 
-    /// 打开词表并建立引擎。优先用主 App 部署到 App Group 的词表；
-    /// 没部署或打不开时退回扩展 Bundle 里的同一份文件。
+    /// 打开扩展 Bundle 里的词表并建立引擎。词表跟着扩展一起安装和更新，
+    /// 不再复制到 App Group：副本只有打开主 App 才会刷新，更新后键盘会一直用旧词表。
     /// 失败时返回错误原因，成功返回 nil。
     func open(dataDirectory: URL) -> String? {
         lock.lock()
@@ -45,42 +45,30 @@ final class WenshanBridge: @unchecked Sendable {
         engine = nil
         lastRune = nil
 
-        var paths: [URL] = []
-        if let shared = AppGroup.dictURL {
-            paths.append(shared)
-        }
-        if let bundled = Bundle.main.url(forResource: "dict", withExtension: "bin") {
-            paths.append(bundled)
-        }
-        guard !paths.isEmpty else {
+        guard let url = Bundle.main.url(forResource: "dict", withExtension: "bin") else {
             return "扩展里找不到 dict.bin"
         }
-
-        var lastError = ""
-        for url in paths {
-            do {
-                // mappedIfSafe 让 18 MB 词表走 mmap，不整块复制进扩展内存。
-                let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                let dict = try Dict(data: data)
-                let eng = Engine(dict: dict)
-                let sess = Session(eng: eng)
-                sess.setLookbehind { [weak self] in self?.lastRune }
-                if !dataDirectory.path.isEmpty {
-                    eng.setFreq(
-                        Freq.load(dataDirectory.appendingPathComponent("freq.tsv").path))
-                    eng.setUserDict(
-                        UserDict.load(dataDirectory.appendingPathComponent("userdict.tsv").path))
-                    eng.setPhrases(
-                        UserDict.load(dataDirectory.appendingPathComponent("phrases.tsv").path))
-                }
-                engine = eng
-                session = sess
-                return nil
-            } catch {
-                lastError = String(describing: error)
+        do {
+            // mappedIfSafe 让 17 MB 词表走 mmap，不整块复制进扩展内存。
+            let data = try Data(contentsOf: url, options: .mappedIfSafe)
+            let dict = try Dict(data: data)
+            let eng = Engine(dict: dict)
+            let sess = Session(eng: eng)
+            sess.setLookbehind { [weak self] in self?.lastRune }
+            if !dataDirectory.path.isEmpty {
+                eng.setFreq(
+                    Freq.load(dataDirectory.appendingPathComponent("freq.tsv").path))
+                eng.setUserDict(
+                    UserDict.load(dataDirectory.appendingPathComponent("userdict.tsv").path))
+                eng.setPhrases(
+                    UserDict.load(dataDirectory.appendingPathComponent("phrases.tsv").path))
             }
+            engine = eng
+            session = sess
+            return nil
+        } catch {
+            return String(describing: error)
         }
-        return lastError
     }
 
     /// 把词频和自造词里所有未落盘的改动写盘。

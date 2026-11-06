@@ -59,7 +59,7 @@ Go 版源码仍在根目录，`sh scripts/install.sh` 可以重新装回 Go 版�
 ## iOS
 
 `ios/` 下是 Swift 6 键盘扩展，直接复用 `swift/Sources/WenshanCore` 的规则层。
-已接通 App Group 词表部署、候选条编码区、中英切换、Shift、符号页、按键预览、
+已接通候选条编码区、中英切换、Shift、符号页、按键预览、
 删除连发、空格拖光标和 iPad 分档布局，以及用户词频/自造词/短语加载；仍在模拟器验证
 阶段，真机内存和发布化未完成。构建、无头模拟器验证和已知限制见
 [ios/README.md](ios/README.md)。

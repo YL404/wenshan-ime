@@ -3,8 +3,6 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var text = ""
-    @State private var deployStatus = "准备中…"
-    @State private var deployFailed = false
     @State private var dataStatus = "准备中…"
     @State private var freqCount = 0
     @State private var userCount = 0
@@ -18,12 +16,6 @@ struct ContentView: View {
                     Text("设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → 第三方键盘 → 文山")
                     Text("在输入框里长按地球键切换到文山。")
                         .foregroundStyle(.secondary)
-                }
-
-                Section("词表") {
-                    Text(deployStatus)
-                        .foregroundStyle(deployFailed ? .red : .secondary)
-                    Button("重新部署") { deploy() }
                 }
 
                 Section {
@@ -56,7 +48,6 @@ struct ContentView: View {
             }
             .navigationTitle("文山")
             .task {
-                deploy()
                 refreshData()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -67,20 +58,6 @@ struct ContentView: View {
             } message: {
                 Text("会删除词频和自造词，不影响词表与短语。")
             }
-        }
-    }
-
-    /// 主 App 只把扩展里的词表复制到 App Group，不加载 Go 引擎。
-    private func deploy() {
-        do {
-            let url = try DictDeployer.deploy()
-            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-            let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
-            deployStatus = "已部署 \(size / 1_048_576) MB"
-            deployFailed = false
-        } catch {
-            deployStatus = "部署失败：\(error.localizedDescription)"
-            deployFailed = true
         }
     }
 
