@@ -13,3 +13,4 @@ ios/WenshanKeyboard/Info.plist
 
 # Swift Package 构建产物
 swift/.build/
+swift/.swiftpm/
