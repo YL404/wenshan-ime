@@ -4,7 +4,7 @@ import WenshanCore
 /// 候选窗是一个「永远不会成为焦点」的浮动面板：NSPanel 带
 /// .nonactivatingPanel，所以点它不会抢走当前 App 的焦点。
 ///
-/// 外观：面板底是 .clear 样式的液态玻璃（NSGlassEffectView），每个候选是一个
+/// 外观：面板底是 .regular 样式的液态玻璃（NSGlassEffectView），每个候选是一个
 /// 独立的圆角色块，选中的那个铺实心强调色、文字转白。文字用系统标签色，
 /// 玻璃会按背后的内容和深浅模式调对比度。同一个面板也用来显示模式提示
 /// （中文/英文/全角/半角）。
@@ -63,7 +63,7 @@ final class CandidateWindow {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
 
-        glass.style = .clear
+        glass.style = .regular
         glass.cornerRadius = candRadius
         glass.contentView = content
         panel.contentView = glass
