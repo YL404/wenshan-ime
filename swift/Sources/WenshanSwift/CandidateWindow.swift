@@ -201,7 +201,7 @@ final class CandidateWindow {
             let chipFrame = NSRect(x: xr, y: candOuter, width: w, height: h)
             if i == selected {
                 selectionGlass.frame = chipFrame
-                selectionGlass.tintColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.6)
+                selectionGlass.tintColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.8)
                 selectionGlass.isHidden = false
             }
             if hasLabel {
