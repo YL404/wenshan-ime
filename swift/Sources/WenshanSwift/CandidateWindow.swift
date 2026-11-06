@@ -19,7 +19,7 @@ final class CandidateWindow {
     private let panel: NSPanel
     private let glass: NSGlassEffectView
     private let content: NSView
-    private let pageHint: NSTextField
+    private let moreHint: NSImageView
     private var chips: [Chip] = []
 
     private let font = NSFont.systemFont(ofSize: 14)
@@ -46,11 +46,15 @@ final class CandidateWindow {
             defer: false)
         let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
-        let hint = makeField(font: labelFont, alignment: .left)
+        let hint = NSImageView(frame: .zero)
+        hint.image = NSImage(
+            systemSymbolName: "chevron.right", accessibilityDescription: "还有下一页")
+        hint.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        hint.contentTintColor = .secondaryLabelColor
         self.panel = panel
         self.glass = glass
         self.content = content
-        self.pageHint = hint
+        self.moreHint = hint
 
         panel.level = .popUpMenu
         panel.isOpaque = false
@@ -88,28 +92,23 @@ final class CandidateWindow {
             chips.append(Chip(bg: bg, label: label, text: text))
         }
 
-        // 页码 / 到底提示是一个独立的小字视图，放在候选条右端，不占候选槽。
+        // 「还有下一页」箭头是一个独立的图标视图，放在候选条右端，不占候选槽。
         hint.isHidden = true
         content.addSubview(hint)
     }
 
-    /// 显示候选列表，selected 指定的那个填强调色。pageNo / hasNext 用来在
-    /// 右端标出页码和「还有更多」，翻到末页时不再静默无提示。
-    func show(_ cands: [Candidate], caret: NSRect, pageNo: Int, hasNext: Bool) {
+    /// 显示候选列表，第 1 个填强调色。hasNext 为真时在右端画一个箭头，
+    /// 表示还有下一页；末页不画。
+    func show(_ cands: [Candidate], caret: NSRect, hasNext: Bool) {
         isHUD = false
-        var hint = ""
-        if pageNo > 0 || hasNext {
-            hint = "\(pageNo + 1)"
-            if hasNext { hint += " ›" }
-        }
         let items = cands.enumerated().map { (label: "\($0.offset + 1).", text: $0.element.text) }
-        layout(items: items, selected: 0, caret: caret, hint: hint)
+        layout(items: items, selected: 0, caret: caret, hasNext: hasNext)
     }
 
     /// 显示一小段模式提示。
     func showText(_ text: String, caret: NSRect) {
         isHUD = true
-        layout(items: [(label: "", text: text)], selected: -1, caret: caret, hint: "")
+        layout(items: [(label: "", text: text)], selected: -1, caret: caret, hasNext: false)
     }
 
     func hide() {
@@ -125,17 +124,17 @@ final class CandidateWindow {
     }
 
     private func layout(
-        items: [(label: String, text: String)], selected: Int, caret: NSRect, hint: String
+        items: [(label: String, text: String)], selected: Int, caret: NSRect, hasNext: Bool
     ) {
         // 文字用动态的系统标签色，切深浅模式会自己跟着变；色块是 CGColor，
         // 要在面板当前的外观下取值，所以整段布局放在这个外观里做。
         panel.effectiveAppearance.performAsCurrentDrawingAppearance {
-            layoutInAppearance(items: items, selected: selected, caret: caret, hint: hint)
+            layoutInAppearance(items: items, selected: selected, caret: caret, hasNext: hasNext)
         }
     }
 
     private func layoutInAppearance(
-        items: [(label: String, text: String)], selected: Int, caret: NSRect, hint: String
+        items: [(label: String, text: String)], selected: Int, caret: NSRect, hasNext: Bool
     ) {
         let dimText = NSColor.labelColor
         let labelDim = NSColor.secondaryLabelColor
@@ -207,19 +206,17 @@ final class CandidateWindow {
             maxH = max(maxH, h)
         }
 
-        // 页码 / 到底提示单独一个视图，接在最后一个候选右侧。
-        if hint.isEmpty {
-            pageHint.isHidden = true
-        } else {
-            pageHint.isHidden = false
-            pageHint.stringValue = hint
-            pageHint.textColor = labelDim
-            let hs = (hint as NSString).size(withAttributes: [.font: labelFont])
-            let hw = ceil(hs.width) + 4
-            let hh = ceil(hs.height)
-            pageHint.frame = NSRect(
-                x: x.rounded(), y: candOuter + (maxH - hh) / 2, width: hw, height: hh)
+        // 「还有下一页」箭头单独一个视图，接在最后一个候选右侧。
+        let hintSize = moreHint.intrinsicContentSize
+        if hasNext, hintSize.width > 0, hintSize.height > 0 {
+            moreHint.isHidden = false
+            let hw = ceil(hintSize.width)
+            let hh = ceil(hintSize.height)
+            moreHint.frame = NSRect(
+                x: x.rounded(), y: candOuter + ((maxH - hh) / 2).rounded(), width: hw, height: hh)
             x += hw + candGap
+        } else {
+            moreHint.isHidden = true
         }
 
         let width = x - candGap + candOuter

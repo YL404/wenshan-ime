@@ -296,8 +296,7 @@ final class AppState {
             candidates.hide()
             return
         }
-        candidates.show(
-            cands, caret: caret, pageNo: session.pageNo, hasNext: session.hasNextPage)
+        candidates.show(cands, caret: caret, hasNext: session.hasNextPage)
     }
 
     // MARK: - Shift / 模式提示
@@ -399,8 +398,7 @@ final class AppState {
         }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
         let caret = NSRect(x: screen.midX - 120, y: screen.midY, width: 2, height: 18)
-        candidates.show(
-            session.candidates, caret: caret, pageNo: 0, hasNext: session.hasNextPage)
+        candidates.show(session.candidates, caret: caret, hasNext: session.hasNextPage)
         Log.shared.write("demo: \(session.candidates.map(\.text))")
     }
 }
