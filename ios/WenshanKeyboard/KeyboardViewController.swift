@@ -225,7 +225,9 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func currentMetrics() -> KeyboardMetrics {
-        let screen = view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
+        // viewDidLoad 时还没挂到窗口，先按视图自身大小估；挂上窗口后
+        // viewDidLayoutSubviews 会用真实屏幕尺寸重算。
+        let screen = view.window?.windowScene?.screen.bounds.size ?? view.bounds.size
         let width = view.bounds.width > 0 ? view.bounds.width : screen.width
         let isPad = traitCollection.userInterfaceIdiom == .pad
         let isFloating = isPad && width < screen.width * 0.9 && width < screen.height

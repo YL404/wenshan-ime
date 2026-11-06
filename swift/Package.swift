@@ -6,7 +6,7 @@ import PackageDescription
 // dictgen 把 Rime 词库编译成 dict.bin，icon 画 App 和输入源图标，只在构建时运行。
 let package = Package(
     name: "WenshanCore",
-    platforms: [.macOS("26.0"), .iOS("17.0")],
+    platforms: [.macOS("26.0"), .iOS("26.0")],
     products: [
         .library(name: "WenshanCore", targets: ["WenshanCore"]),
         .executable(name: "WenshanSwift", targets: ["WenshanSwift"]),

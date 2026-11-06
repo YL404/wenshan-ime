@@ -47,11 +47,9 @@ final class TextGridView: UIView {
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.showsVerticalScrollIndicator = true
-        if #available(iOS 26.0, *) {
-            // 默认 edge effect 会把首末两行文字模糊掉。
-            collectionView.topEdgeEffect.isHidden = true
-            collectionView.bottomEdgeEffect.isHidden = true
-        }
+        // 默认 edge effect 会把首末两行文字模糊掉。
+        collectionView.topEdgeEffect.isHidden = true
+        collectionView.bottomEdgeEffect.isHidden = true
         collectionView.register(GridCell.self, forCellWithReuseIdentifier: GridCell.reuseID)
         collectionView.dataSource = self
         collectionView.delegate = self

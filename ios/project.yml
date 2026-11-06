@@ -2,7 +2,7 @@ name: Wenshan
 options:
   bundleIdPrefix: im.wenshan
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 
 packages:
@@ -12,7 +12,7 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     CODE_SIGN_STYLE: Automatic
 
 targets:
