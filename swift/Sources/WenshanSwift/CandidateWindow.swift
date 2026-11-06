@@ -4,10 +4,9 @@ import WenshanCore
 /// 候选窗是一个「永远不会成为焦点」的浮动面板：NSPanel 带
 /// .nonactivatingPanel，所以点它不会抢走当前 App 的焦点。
 ///
-/// 外观：面板底是 .regular 样式的液态玻璃（NSGlassEffectView），每个候选是一个
-/// 独立的圆角色块，选中的那个铺实心强调色、文字转白。文字用系统标签色，
-/// 玻璃会按背后的内容和深浅模式调对比度。同一个面板也用来显示模式提示
-/// （中文/英文/全角/半角）。
+/// 外观：面板底是 .clear 样式的液态玻璃（NSGlassEffectView），每个候选是一个
+/// 独立的圆角色块，选中的那个铺实心强调色。文字统一用白色，序号和箭头用
+/// 半透明白。同一个面板也用来显示模式提示（中文/英文/全角/半角）。
 @MainActor
 final class CandidateWindow {
     private struct Chip {
@@ -27,9 +26,9 @@ final class CandidateWindow {
     private var shown = false
     private var isHUD = false
 
-    private let candPadX = 7.0  // 色块内左右留白
+    private let candPadX = 5.0  // 色块内左右留白
     private let candPadY = 3.0  // 色块内上下留白
-    private let candGap = 6.0  // 候选之间的间隔
+    private let candGap = 2.0  // 候选之间的间隔
     private let candOuter = 6.0  // 面板四周留白
     private let chipRadius = 5.0  // 候选色块圆角
     /// 面板圆角取色块圆角加四周留白，内外圆角同心，液态玻璃的边缘才和色块平行。
@@ -50,7 +49,7 @@ final class CandidateWindow {
         hint.image = NSImage(
             systemSymbolName: "chevron.right", accessibilityDescription: "还有下一页")
         hint.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        hint.contentTintColor = .secondaryLabelColor
+        hint.contentTintColor = NSColor.white.withAlphaComponent(0.6)
         self.panel = panel
         self.glass = glass
         self.content = content
@@ -67,7 +66,7 @@ final class CandidateWindow {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
 
-        glass.style = .regular
+        glass.style = .clear
         glass.cornerRadius = candRadius
         glass.contentView = content
         panel.contentView = glass
@@ -126,8 +125,8 @@ final class CandidateWindow {
     private func layout(
         items: [(label: String, text: String)], selected: Int, caret: NSRect, hasNext: Bool
     ) {
-        // 文字用动态的系统标签色，切深浅模式会自己跟着变；色块是 CGColor，
-        // 要在面板当前的外观下取值，所以整段布局放在这个外观里做。
+        // 选中色块用的系统强调色是 CGColor，要在面板当前的外观下取值，
+        // 所以整段布局放在这个外观里做。
         panel.effectiveAppearance.performAsCurrentDrawingAppearance {
             layoutInAppearance(items: items, selected: selected, caret: caret, hasNext: hasNext)
         }
@@ -136,8 +135,8 @@ final class CandidateWindow {
     private func layoutInAppearance(
         items: [(label: String, text: String)], selected: Int, caret: NSRect, hasNext: Bool
     ) {
-        let dimText = NSColor.labelColor
-        let labelDim = NSColor.secondaryLabelColor
+        let dimText = NSColor.white
+        let labelDim = NSColor.white.withAlphaComponent(0.6)
         var x = candOuter
         var maxH = 0.0
         for i in 0..<maxChips {
