@@ -11,12 +11,10 @@ final class Log {
     private init() {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Wenshan.log")
-        // createFile 遇到已有文件会清空它，只在文件不存在时才建。
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        handle = try? FileHandle(forWritingTo: url)
-        _ = try? handle?.seekToEnd()
+        // O_APPEND 让每次写都落在文件末尾：安装或调试时可能有两个进程同时写，
+        // 各自记偏移会互相覆盖。不带 O_TRUNC，重启不清空上次崩溃前的记录。
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
+        handle = fd >= 0 ? FileHandle(fileDescriptor: fd, closeOnDealloc: true) : nil
         formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
     }
