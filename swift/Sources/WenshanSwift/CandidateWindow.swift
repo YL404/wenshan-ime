@@ -5,14 +5,13 @@ import WenshanCore
 /// .nonactivatingPanel，所以点它不会抢走当前 App 的焦点。
 ///
 /// 外观：面板底是 .clear 样式的液态玻璃（NSGlassEffectView），每个候选是一个
-/// 独立的圆角色块，选中的那个铺实心强调色。文字统一用白色，序号和箭头用
-/// 半透明白；玻璃再压一层 30% 的黑，文字再带一点阴影，白字落在白色页面上
-/// 也有对比度。
+/// 独立的圆角色块，选中的那个是一块强调色 tint 的玻璃。文字统一用白色，序号
+/// 和箭头用半透明白；玻璃再压一层 30% 的黑，文字再带一点阴影，白字落在白色
+/// 页面上也有对比度。
 /// 同一个面板也用来显示模式提示（中文/英文/全角/半角）。
 @MainActor
 final class CandidateWindow {
     private struct Chip {
-        let bg: NSView
         let label: NSTextField
         let text: NSTextField
     }
@@ -20,6 +19,7 @@ final class CandidateWindow {
     private let panel: NSPanel
     private let glass: NSGlassEffectView
     private let content: NSView
+    private let selectionGlass: NSGlassEffectView
     private let moreHint: NSImageView
     private var chips: [Chip] = []
 
@@ -56,6 +56,11 @@ final class CandidateWindow {
             defer: false)
         let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        let selection = NSGlassEffectView(frame: .zero)
+        // .regular 会把 tint 洗成灰色，只有 .clear 能真正带出强调色。
+        selection.style = .clear
+        selection.cornerRadius = chipRadius
+        selection.isHidden = true
         let hint = NSImageView(frame: .zero)
         hint.image = NSImage(
             systemSymbolName: "chevron.right", accessibilityDescription: "还有下一页")
@@ -64,6 +69,7 @@ final class CandidateWindow {
         self.panel = panel
         self.glass = glass
         self.content = content
+        self.selectionGlass = selection
         self.moreHint = hint
 
         panel.level = .popUpMenu
@@ -85,15 +91,11 @@ final class CandidateWindow {
         glass.contentView = content
         panel.contentView = glass
 
-        for _ in 0..<maxChips {
-            // 底色、序号、候选分成三个视图：色块负责圆角和内边距，两个文字
-            // 视图的尺寸都等于实测文字大小，这样才能真正居中。
-            let bg = NSView(frame: .zero)
-            bg.wantsLayer = true
-            bg.layer?.cornerRadius = chipRadius
-            bg.isHidden = true
-            content.addSubview(bg)
+        // 选中玻璃放在所有文字下面，随选中的候选移动；未选中时不显示。
+        content.addSubview(selection)
 
+        for _ in 0..<maxChips {
+            // 序号、候选两个文字视图的尺寸都等于实测文字大小，这样才能真正居中。
             let label = makeField(font: labelFont, alignment: .center)
             label.isHidden = true
             content.addSubview(label)
@@ -102,7 +104,7 @@ final class CandidateWindow {
             text.isHidden = true
             content.addSubview(text)
 
-            chips.append(Chip(bg: bg, label: label, text: text))
+            chips.append(Chip(label: label, text: text))
         }
 
         // 「还有下一页」箭头是一个独立的图标视图，放在候选条右端，不占候选槽。
@@ -153,15 +155,14 @@ final class CandidateWindow {
         let labelDim = NSColor.white.withAlphaComponent(0.6)
         var x = candOuter
         var maxH = 0.0
+        selectionGlass.isHidden = true
         for i in 0..<maxChips {
             let chip = chips[i]
             guard i < items.count else {
-                chip.bg.isHidden = true
                 chip.label.isHidden = true
                 chip.text.isHidden = true
                 continue
             }
-            chip.bg.isHidden = false
             chip.text.isHidden = false
 
             let item = items[i]
@@ -185,8 +186,6 @@ final class CandidateWindow {
 
             if i == selected {
                 setSelected(chip, hasLabel: hasLabel)
-            } else {
-                chip.bg.layer?.backgroundColor = NSColor.clear.cgColor
             }
 
             // 色块 = 序号槽 + 间距 + 正文 + 两侧内边距；两个文字视图的尺寸
@@ -199,7 +198,12 @@ final class CandidateWindow {
             let h = innerH + 2 * candPadY
             let xr = x.rounded()
             var textX = xr + candPadX
-            chip.bg.frame = NSRect(x: xr, y: candOuter, width: w, height: h)
+            let chipFrame = NSRect(x: xr, y: candOuter, width: w, height: h)
+            if i == selected {
+                selectionGlass.frame = chipFrame
+                selectionGlass.tintColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.8)
+                selectionGlass.isHidden = false
+            }
             if hasLabel {
                 chip.label.frame = NSRect(
                     x: textX,
@@ -257,14 +261,11 @@ final class CandidateWindow {
         }
     }
 
-    /// 选中的色块铺成实心强调色、文字换成白色。用一对系统选中态语义色：
-    /// 强调色改成黄、灰时这对色会一起变，白字始终压得住底。
+    /// 选中项的文字换成白色。选中玻璃的 tint 在布局时按同一个强调色设置。
     private func setSelected(_ chip: Chip, hasLabel: Bool) {
-        let fill = NSColor.selectedContentBackgroundColor
         let text = NSColor.alternateSelectedControlTextColor
         setText(chip.text, chip.text.stringValue, font: font, color: text)
         if hasLabel { setText(chip.label, chip.label.stringValue, font: labelFont, color: text) }
-        chip.bg.layer?.backgroundColor = fill.cgColor
     }
 
     /// 用属性文本设置文字；颜色和字体都走这一处，阴影不会在切选中态时丢掉。
