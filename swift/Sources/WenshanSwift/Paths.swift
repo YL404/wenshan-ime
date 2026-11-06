@@ -1,6 +1,6 @@
 import Foundation
 
-/// 文件位置。用户数据和 Go 版分开，避免两个进程同时写坏同一份词频。
+/// 用户数据和词表的位置。
 enum Paths {
     static let appSupport = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Wenshan")

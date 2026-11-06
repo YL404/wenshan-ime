@@ -20,7 +20,7 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
 
 - `Shared/AppGroup.swift`：App Group 标识和共享目录路径。
 - `WenshanHost/`：宿主 App。
-  - `Assets.xcassets`：App 图标。`cmd/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
+  - `Assets.xcassets`：App 图标。`swift/Sources/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
   - `ContentView.swift`：启用说明、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
   - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开词表在
@@ -52,7 +52,7 @@ WenshanKeyboard
 
 ## 构建
 
-依赖 Xcode 27、XcodeGen。图标生成仍用 Go 工具 `cmd/icon`，只影响构建，不进 App：
+依赖 Xcode 27、XcodeGen。图标由 `swift/Sources/icon` 生成，只影响构建，不进 App：
 
 ```sh
 brew install xcodegen
@@ -62,7 +62,7 @@ sh ios/scripts/build.sh
 脚本会：
 
 1. 把根目录 `dict.bin` 复制到 `ios/build/dict.bin`；
-2. 用 `cmd/icon` 生成 1024×1024 的 `AppIcon.png`；
+2. 用 `swift/Sources/icon` 生成 1024×1024 的 `AppIcon.png`；
 3. 用 `xcodegen` 生成 Xcode 工程（本地 Swift Package `swift/`）；
 4. 用默认 ad-hoc 签名构建模拟器 App。
 
@@ -114,7 +114,7 @@ function run([udid, developerDir]) {
 
 ## 内存
 
-Go 版之前在模拟器（iPhone 18 Pro，iOS 27.2，Debug）实测：键盘扩展启动约 30 MB，
+之前的 Go 规则层版本在模拟器（iPhone 18 Pro，iOS 27.2，Debug）实测：键盘扩展启动约 30 MB，
 完成一次上屏约 32 MB，50 次连续上屏后约 23 MB，收起键盘后回落到约 20 MB；
 词表通过文件 mmap，没有整块读入内存。Swift 版换了规则层，这组数字需要
 重新测；结构上仍是 mmap 词表，预计同一量级。

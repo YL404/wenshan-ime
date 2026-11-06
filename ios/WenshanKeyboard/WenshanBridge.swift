@@ -19,8 +19,7 @@ struct BridgeOutcome: Equatable {
 }
 
 /// WenshanCore 的门面，也是唯一持有引擎状态的地方。
-/// 按键都在主线程；只有打开词表在后台任务里，所以用一把锁把状态串起来，
-/// 和原来的 Go 桥锁语义一致。
+/// 按键都在主线程；只有打开词表在后台任务里，所以用一把锁把状态串起来。
 final class WenshanBridge: @unchecked Sendable {
     /// 光标前的正文，由键盘 VC 提供。规则层判断要不要补空格时读它。
     var contextBefore: () -> String = { "" }

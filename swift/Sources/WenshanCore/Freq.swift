@@ -113,7 +113,7 @@ func fileStamp(_ path: String) -> Date? {
     return (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
 }
 
-/// 按行切分，等价于 Go 的 bufio.Scanner：去掉行尾的 \n，也去掉 \r\n 里的 \r。
+/// 按行切分：去掉行尾的 \n，也去掉 \r\n 里的 \r。
 func textLines(_ text: String) -> [String] {
     var parts = text.components(separatedBy: "\n")
     if parts.last == "" { parts.removeLast() }

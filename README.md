@@ -2,15 +2,16 @@
 
 <h1>文山输入法<br clear="right"></h1>
 
-macOS 上的双拼输入法，另有 iOS 键盘扩展。键位为自然码。macOS 版是 Swift 实现，
-规则层移植自同仓库的 Go 版；不依赖 librime 之类的输入法引擎，词表在构建时编译进
-app，每次按键只是一次二分查找。
+macOS 上的双拼输入法，另有 iOS 键盘扩展。键位为自然码。两端都是 Swift 实现，共用
+同一套规则层；不依赖 librime 之类的输入法引擎，词表在构建时编译进 app，每次按键只是
+一次二分查找。
 
 ## 特性
 
 - **轻快**：单进程，按键处理不跨进程；词表按编码排序，二分定位。真实词表上每次按键
-  （查词 + 组句 + 纠错）Go 版约 5–30 µs，Swift 版 release 约 50–125 µs，都远低于一帧。
-- **零外部依赖**：不用 librime，不用 CMake；macOS 版 `swift build` 即可构建，词表打包进 app。
+  （查词 + 组句 + 纠错）release 约 25–60 µs，远低于一帧。
+- **零外部依赖**：不用 librime，不用 CMake；只要 Xcode 自带的 Swift 工具链，词表和图标
+  也由同一个 Swift 包里的工具生成。
 - **双拼自然码**：每音节两键，支持一级简码（`l`→了、`w`→我、`d`→的、`b`→不、`n`→你）。
 - **单字辅码**：单字两键后可再打 1-2 位部首辅码，`ni` → `nir` → `nirx`，同音字不用翻。
 - **候选翻页**：一页 9 个，`=` / `-` 或 PageDown / PageUp 翻页，最多 20 页；候选窗开着时
@@ -30,10 +31,9 @@ app，每次按键只是一次二分查找。
 sh swift/scripts/install.sh
 ```
 
-首次会下载 rime-ice 词库并编译成 `dict.bin`（约 17 MB，已 gitignore）。脚本把 Swift
-版装成默认的「文山」，沿用原来的 bundle id、输入源和
-`~/Library/Application Support/Wenshan` 下的词频/短语。目标位置还是 Go 版时，会先
-备份到 `~/Library/Application Support/Wenshan/backup/Wenshan-go.app`。
+首次会下载 rime-ice 词库并编译成 `dict.bin`（约 17 MB，已 gitignore）。安装沿用
+固定的 bundle id、输入源和 `~/Library/Application Support/Wenshan` 下的词频/短语，
+覆盖安装不用重新添加输入源。
 
 签名默认用 ad-hoc。用本机开发者证书可以让系统把每次构建当成同一个应用，「允许启用」
 的授权不会每次重置：
@@ -50,11 +50,6 @@ CODESIGN_IDENTITY="Apple Development: 你的名字 (XXXXXXXXXX)" sh swift/script
 ```sh
 pkill -f "Input Methods/Wenshan.app"; rm -rf ~/Library/Input\ Methods/Wenshan.app
 ```
-
-### Go 版（回退用）
-
-Go 版源码仍在根目录，`sh scripts/install.sh` 可以重新装回 Go 版；它会覆盖同一个
-`Wenshan.app`，输入源 ID 不变。
 
 ## iOS
 
@@ -96,17 +91,16 @@ Go 版源码仍在根目录，`sh scripts/install.sh` 可以重新装回 Go 版�
 进程，剩下的耗时是前台应用排版预编辑串，任何输入法都一样。
 
 ```
-swift/Sources/WenshanCore      Swift 规则层：自然码、词表、组句、纠错、词频、输入规则
-swift/Sources/WenshanSwift     Swift macOS 壳：IMK 注册、按键处理、候选窗、输入源
-engine/ input/                 Go 规则层（macOS 版回退用；iOS 已改用 Swift）
-main/imk/tis/objc/candidate    Go 版 macOS 壳（回退用）
-cmd/dictgen                    Rime 词表 → dict.bin
-cmd/icon、tisprobe、swap        图标生成、输入源诊断、原子交换 Contents
-packaging/ scripts/            Go 版 Info.plist、构建/安装/修复脚本
+swift/Sources/WenshanCore      规则层：自然码、词表、组句、纠错、词频、输入规则（macOS 和 iOS 共用）
+swift/Sources/WenshanSwift     macOS 壳：IMK 注册、按键处理、候选窗、输入源
+swift/Sources/dictgen          Rime 词库 → dict.bin
+swift/Sources/icon             App 图标、输入源图标、iOS AppIcon
+ios/                           iOS 宿主 App 和键盘扩展
+scripts/                       下载词库、一键修复
 ```
 
 词表流水线：`scripts/fetch-dict.sh` 下载 rime-ice 的 `8105` + `base` + `others`
-（约 55 万条），`cmd/dictgen` 把每个音节转成两键编码，主表按编码排序供二分查找，
+（约 55 万条），`dictgen` 把每个音节转成两键编码，主表按编码排序供二分查找，
 另存 26 个字母的单键候选（一级简码优先）。单字辅码表来自 rime-frost 的
 `moqi_aux_code.txt`，按 2+1 / 2+2 生成三码、四码条目。
 
@@ -128,7 +122,8 @@ C++、手写几十个函数绑定、YAML 配置。自建词表引擎只要一次
 
 自定义短语放在同目录的 `phrases.tsv`，每行「编码<TAB>文本」，空行和 `#` 开头的行忽略，
 编码用小写字母。固定大小写的英文专名也放这里，例如 `iphone<TAB>iPhone`、
-`github<TAB>GitHub`、`iosban<TAB>iOS版`。短语只读，不会被写回；改完重启输入法生效。
+`github<TAB>GitHub`、`iosban<TAB>iOS版`。短语只读，不会被写回；改完切到别的输入源再
+切回文山就会重新读入。
 
 ## 疑难解答
 
@@ -151,9 +146,7 @@ sh scripts/repair.sh
 
 ## 实现
 
-macOS 版是 `swift/` 下的 Swift 实现，bundle id 与旧 Go 版相同，安装后系统里仍是
-「文山」。Go 版源码保留在根目录，用于回退。结构、构建和验证见
-[swift/README.md](swift/README.md)。
+结构、构建和验证见 [swift/README.md](swift/README.md)。
 
 ## 许可
 
