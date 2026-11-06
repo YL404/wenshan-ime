@@ -126,7 +126,7 @@ func writeU32(_ p: inout [UInt8], _ o: Int, _ v: UInt32) {
     p[o + 3] = UInt8(truncatingIfNeeded: v >> 24)
 }
 
-/// 数 UTF-8 字节里的码点数，等价于 Go 的 utf8.RuneCountInString。
+/// 数 UTF-8 字节里的码点数。
 @inline(__always)
 func runeCount(_ p: UnsafeRawBufferPointer, _ off: Int, _ len: Int) -> Int {
     var count = 0
@@ -647,13 +647,17 @@ func shortLists(_ entries: [Entry]) -> [Entry] {
 }
 
 /// 把 entries 写成词表格式。写之前按 Code 升序、同 Code 按 Weight 降序排好，
-/// 二分查找依赖这个顺序。
+/// 二分查找依赖这个顺序。同编码同权重再按词条字节序排，同一份输入每次生成的
+/// 文件都一样，不随调用方的字典遍历顺序变化。
 public func writeDict(_ entries: [Entry]) -> Data {
     let sorted = entries.sorted { a, b in
         if a.code != b.code {
             return a.code.utf8.lexicographicallyPrecedes(b.code.utf8)
         }
-        return a.weight > b.weight
+        if a.weight != b.weight {
+            return a.weight > b.weight
+        }
+        return a.text.utf8.lexicographicallyPrecedes(b.text.utf8)
     }
     let shorts = shortLists(sorted)
     let all = sorted + shorts

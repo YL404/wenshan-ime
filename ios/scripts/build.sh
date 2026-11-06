@@ -6,17 +6,16 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 
 if [ ! -f dict.bin ]; then
-    echo "缺少 dict.bin，先运行 sh scripts/build.sh 或生成词表" >&2
+    echo "缺少 dict.bin，先运行 sh swift/scripts/build.sh 生成词表" >&2
     exit 1
 fi
 
 mkdir -p ios/build
 cp dict.bin ios/build/dict.bin
-# 清掉旧的 gomobile 产物，工程已经不再引用它。
-rm -rf ios/build/WenshanEngine.xcframework
 
 cd ios
-go run ../cmd/icon -ios-out WenshanHost/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+swift run -c release --package-path ../swift icon \
+    -ios-out WenshanHost/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 xcodegen generate
 xcodebuild \
     -project Wenshan.xcodeproj \

@@ -1,6 +1,5 @@
 #!/bin/sh
-# 把 Swift 版装成默认的「文山」：沿用 Go 版的 bundle id、安装路径和用户数据。
-# 原来的 Go 版会备份到 ~/Library/Application Support/Wenshan/backup/。
+# 把文山装到 ~/Library/Input Methods，沿用原来的 bundle id、输入源和用户数据。
 set -eu
 cd "$(dirname "$0")/../.."
 [ -n "${HOME:-}" ] || { echo "HOME 未设置" >&2; exit 1; }
@@ -9,15 +8,7 @@ sh swift/scripts/build.sh
 
 dest="$HOME/Library/Input Methods/Wenshan.app"
 old="$HOME/Library/Input Methods/WenshanSwift.app"
-backup="$HOME/Library/Application Support/Wenshan/backup/Wenshan-go.app"
 mkdir -p "$HOME/Library/Input Methods"
-
-# 目标还是 Go 版时备份一次；Swift 版带 .swift 标记，重复安装不会反复备份。
-if [ -d "$dest" ] && [ ! -f "$dest/Contents/Resources/.swift" ] && [ ! -e "$backup" ]; then
-	mkdir -p "$(dirname "$backup")"
-	cp -R "$dest" "$backup"
-	echo "已备份 Go 版: $backup"
-fi
 
 # 清掉之前并存测试用的独立 Swift 版和它的输入源。
 if [ -d "$old" ]; then
@@ -61,9 +52,9 @@ fi
 killall imklaunchagent TextInputSwitcher 2>/dev/null || true
 sleep 1
 
-# 输入源还是 im.wenshan.inputmethod.Wenshan.Hans，只是背后的程序换成了 Swift。
+# 输入源 ID 是 im.wenshan.inputmethod.Wenshan.Hans，已经添加过的机器不用重新添加。
 "$dest/Contents/MacOS/Wenshan" --select im.wenshan.inputmethod.Wenshan.Hans >/dev/null 2>&1 || true
 
 echo "已安装: $dest"
-echo "输入源仍是「文山」，用户词频和短语沿用 ~/Library/Application Support/Wenshan。"
+echo "输入源仍是「文山」，用户词频和短语在 ~/Library/Application Support/Wenshan。"
 echo "日志: ~/Library/Logs/Wenshan.log"

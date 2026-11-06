@@ -2,8 +2,8 @@ import AppKit
 import Darwin
 import InputMethodKit
 
-// 和 Go 版使用同一个 bundle id / 连接名 / 输入源：替换后系统认的还是「文山」，
-// 用户不需要重新添加输入源，也不需要改快捷键。
+// 输入源 ID、连接名和 bundle id 一旦被用户添加就不能再改：改了系统会当成另一个
+// 输入法，用户得重新添加输入源、重新设快捷键。
 let bundleID = "im.wenshan.inputmethod.Wenshan"
 let connectionName = bundleID + ".Connection"
 let modeID = bundleID + ".Hans"
@@ -17,6 +17,9 @@ if args.count >= 4, args[1] == "--swap" {
 }
 if args.count >= 3, args[1] == "--select" {
     exit(selectInputSource(args[2]))
+}
+if args.count >= 3, args[1] == "--enable" {
+    exit(enableInputSource(args[2]))
 }
 if args.count >= 3, args[1] == "--disable" {
     exit(disableInputSource(args[2]))
