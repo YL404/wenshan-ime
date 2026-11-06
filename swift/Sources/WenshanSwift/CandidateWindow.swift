@@ -6,7 +6,8 @@ import WenshanCore
 ///
 /// 外观：面板底是 .clear 样式的液态玻璃（NSGlassEffectView），每个候选是一个
 /// 独立的圆角色块，选中的那个铺实心强调色。文字统一用白色，序号和箭头用
-/// 半透明白；玻璃再压一层 30% 的黑，白字落在白色页面上也有对比度。
+/// 半透明白；玻璃再压一层 30% 的黑，文字再带一点阴影，白字落在白色页面上
+/// 也有对比度。
 /// 同一个面板也用来显示模式提示（中文/英文/全角/半角）。
 @MainActor
 final class CandidateWindow {
@@ -37,6 +38,15 @@ final class CandidateWindow {
     private let candLabelSlot = 11.0  // 序号固定槽位
     private let candLabelGap = 4.0  // 序号与候选之间的间隔
     private let maxChips = 9
+
+    /// 文字阴影只求在白底上多一层轮廓，颜色和模糊都压得很轻。
+    private let textShadow: NSShadow = {
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.shadowBlurRadius = 1.5
+        return shadow
+    }()
 
     init() {
         let panel = NSPanel(
@@ -158,7 +168,7 @@ final class CandidateWindow {
             let hasLabel = !item.label.isEmpty
             chip.label.isHidden = !hasLabel
 
-            chip.text.stringValue = item.text
+            setText(chip.text, item.text, font: font, color: dimText)
             var size = (item.text as NSString).size(withAttributes: [.font: font])
             if !(size.width > 0) || !(size.height > 0) {
                 // 量不出来就退回按字数估，绝不把 NaN 传给 setFrame。
@@ -168,7 +178,7 @@ final class CandidateWindow {
             // 序号单独量高度，然后在固定槽位里垂直居中；槽宽不随数字变化。
             var labelHeight = 10.0 * 1.3
             if hasLabel {
-                chip.label.stringValue = item.label
+                setText(chip.label, item.label, font: labelFont, color: labelDim)
                 let ls = (item.label as NSString).size(withAttributes: [.font: labelFont])
                 if ls.height > 0 { labelHeight = ceil(ls.height) }
             }
@@ -176,8 +186,6 @@ final class CandidateWindow {
             if i == selected {
                 setSelected(chip, hasLabel: hasLabel)
             } else {
-                chip.text.textColor = dimText
-                if hasLabel { chip.label.textColor = labelDim }
                 chip.bg.layer?.backgroundColor = NSColor.clear.cgColor
             }
 
@@ -254,9 +262,23 @@ final class CandidateWindow {
     private func setSelected(_ chip: Chip, hasLabel: Bool) {
         let fill = NSColor.selectedContentBackgroundColor
         let text = NSColor.alternateSelectedControlTextColor
-        chip.text.textColor = text
-        if hasLabel { chip.label.textColor = text }
+        setText(chip.text, chip.text.stringValue, font: font, color: text)
+        if hasLabel { setText(chip.label, chip.label.stringValue, font: labelFont, color: text) }
         chip.bg.layer?.backgroundColor = fill.cgColor
+    }
+
+    /// 用属性文本设置文字；颜色和字体都走这一处，阴影不会在切选中态时丢掉。
+    private func setText(_ field: NSTextField, _ string: String, font: NSFont, color: NSColor) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = field.alignment
+        field.attributedStringValue = NSAttributedString(
+            string: string,
+            attributes: [
+                .font: font,
+                .foregroundColor: color,
+                .paragraphStyle: paragraph,
+                .shadow: textShadow,
+            ])
     }
 
     /// 返回包含指定点的屏幕的可用区域（已扣掉菜单栏和 Dock）。
