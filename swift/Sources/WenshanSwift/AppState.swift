@@ -11,6 +11,9 @@ final class AppState {
     let session: Session
     let candidates = CandidateWindow()
     let dictCount: Int
+    /// 词表打不开的原因。输入法是常驻进程，崩了系统会反复拉起再崩，
+    /// 所以这时不退出，按无词表运行：拼音只能按原样上屏。
+    let dictError: String?
     let debugKeys: Bool
 
     var currentClient: (any IMKTextInput)?
@@ -24,18 +27,19 @@ final class AppState {
     var hudToken = 0
 
     private init() {
-        guard let url = Paths.dictURL() else {
-            fatalError("缺少 dict.bin：app 的 Resources 里没有，当前目录也没有")
+        var dict: Dict?
+        var dictError: String?
+        if let url = Paths.dictURL() {
+            do {
+                dict = try Dict(data: Data(contentsOf: url, options: .mappedIfSafe))
+            } catch {
+                dictError = "词表加载失败: \(error)"
+            }
+        } else {
+            dictError = "缺少 dict.bin：app 的 Resources 里没有，当前目录也没有"
         }
-        let data: Data
-        let dict: Dict
-        do {
-            data = try Data(contentsOf: url, options: .mappedIfSafe)
-            dict = try Dict(data: data)
-        } catch {
-            fatalError("词表加载失败: \(error)")
-        }
-        dictCount = dict.count
+        self.dictError = dictError
+        dictCount = dict?.count ?? 0
         debugKeys = FileManager.default.fileExists(atPath: Paths.debugFlag.path)
 
         engine = Engine(dict: dict)
@@ -54,7 +58,11 @@ final class AppState {
     }
 
     func start() {
-        Log.shared.write("词表 \(dictCount) 条，来自 \(Paths.dictURL()?.path ?? "?")")
+        if let dictError {
+            Log.shared.write("\(dictError)；按无词表运行")
+        } else {
+            Log.shared.write("词表 \(dictCount) 条，来自 \(Paths.dictURL()?.path ?? "?")")
+        }
         if debugKeys { Log.shared.write("调试模式：打印每个按键") }
         Log.shared.write("用户数据目录 \(Paths.appSupport.path)")
     }
@@ -170,7 +178,9 @@ final class AppState {
         candidates.hide()
         Log.shared.write("activate mode=\(session.currentMode)")
         // 英文模式下切回来要能看见状态，否则就像「打不出中文」。
-        if session.currentMode == .english {
+        if dictError != nil {
+            showHUD("词表缺失")
+        } else if session.currentMode == .english {
             showHUD("英")
         }
     }
