@@ -18,14 +18,13 @@ struct BridgeOutcome: Equatable {
     var fullWidth: Bool
 }
 
-/// WenshanCore 的门面，也是唯一持有引擎状态的地方。
-/// 按键都在主线程；只有打开词表在后台任务里，所以用一把锁把状态串起来。
-final class WenshanBridge: @unchecked Sendable {
+/// WenshanCore 的门面，也是唯一持有引擎状态的地方。打开词表只是 mmap 加校验文件头，
+/// 连同读用户数据都在主线程做，所以整类只在主线程访问，不加锁。
+@MainActor
+final class WenshanBridge {
     /// 光标前的正文，由键盘 VC 提供。规则层判断要不要补空格时读它。
     var contextBefore: () -> String = { "" }
 
-    private let lock = NSLock()
-    private var engine: Engine?
     private var session: Session?
     private var lastRune: Unicode.Scalar?
 
@@ -37,11 +36,7 @@ final class WenshanBridge: @unchecked Sendable {
     /// 不再复制到 App Group：副本只有打开主 App 才会刷新，更新后键盘会一直用旧词表。
     /// 失败时返回错误原因，成功返回 nil。
     func open(dataDirectory: URL) -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-
         session = nil
-        engine = nil
         lastRune = nil
 
         guard let url = Bundle.main.url(forResource: "dict", withExtension: "bin") else {
@@ -62,7 +57,6 @@ final class WenshanBridge: @unchecked Sendable {
                 eng.setPhrases(
                     UserDict.load(dataDirectory.appendingPathComponent("phrases.tsv").path))
             }
-            engine = eng
             session = sess
             return nil
         } catch {
@@ -72,8 +66,6 @@ final class WenshanBridge: @unchecked Sendable {
 
     /// 把词频和自造词里所有未落盘的改动写盘。
     func flush() {
-        lock.lock()
-        defer { lock.unlock() }
         do {
             try session?.save(force: true)
         } catch {
@@ -84,15 +76,11 @@ final class WenshanBridge: @unchecked Sendable {
     /// 键盘再次出现时调用：主 App 清空了学习记录、或另一个键盘进程写过文件，
     /// 就重新读盘。收起时已经 flush 过，不会丢掉本进程的改动。
     func reloadUserDataIfChanged() {
-        lock.lock()
-        defer { lock.unlock() }
         session?.reloadIfChangedOnDisk()
     }
 
     /// 当前组合状态和模式，不执行动作。词表还没打开时返回 nil。
     func current() -> BridgeOutcome? {
-        lock.lock()
-        defer { lock.unlock() }
         guard session != nil else { return nil }
         return snapshot()
     }
@@ -146,14 +134,10 @@ final class WenshanBridge: @unchecked Sendable {
     }
 
     func reset() {
-        lock.lock()
-        defer { lock.unlock() }
         session?.reset()
     }
 
     func allCandidates() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
         return session?.allCandidates.map(\.text) ?? []
     }
 
@@ -163,8 +147,6 @@ final class WenshanBridge: @unchecked Sendable {
         if syncContext {
             setContextBefore(contextBefore())
         }
-        lock.lock()
-        defer { lock.unlock() }
         guard let session else { return Self.empty }
         let result = action(session)
         // 和原来一样，词频攒够 50 次才写盘；失败不影响这次按键。
@@ -175,8 +157,6 @@ final class WenshanBridge: @unchecked Sendable {
     /// 更新光标前的正文。组合中正文末尾挂着预编辑串本身，要先去掉：
     /// 动作里选词会消耗缓冲，到规则层读光标前字符时预编辑已经变了。
     private func setContextBefore(_ text: String) {
-        lock.lock()
-        defer { lock.unlock() }
         guard let session else { return }
         var trimmed = text
         let preedit = session.preedit

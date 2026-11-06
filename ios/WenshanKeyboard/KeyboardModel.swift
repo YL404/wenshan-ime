@@ -19,7 +19,6 @@ enum KeyboardOutcome {
 @MainActor
 final class KeyboardModel {
     enum Phase: Equatable {
-        case loading
         case ready
         case failed(String)
     }
@@ -37,7 +36,7 @@ final class KeyboardModel {
         var isActive: Bool { self != .off }
     }
 
-    private(set) var phase: Phase = .loading
+    private(set) var phase: Phase = .failed("词表还没打开")
     private(set) var preedit = ""
     private(set) var candidates: [String] = []
     private(set) var mode: InputMode = .chinese
@@ -46,7 +45,6 @@ final class KeyboardModel {
     private(set) var returnKeyType: UIReturnKeyType = .default
 
     private let bridge = WenshanBridge()
-    private var isLoading = false
     private var lastShiftTap: TimeInterval = 0
 
     /// 光标前的正文，由 VC 挂上。规则层判断中英文之间要不要补空格时读它。
@@ -84,21 +82,14 @@ final class KeyboardModel {
         }
     }
 
-    /// 后台打开词表。失败后再次出现时允许重试。桥接层自己加锁。
-    func load(dataDirectory: URL) async {
-        guard phase != .ready, !isLoading else { return }
-        isLoading = true
-        phase = .loading
-        let bridge = self.bridge
-        let error = await Task.detached(priority: .userInitiated) {
-            bridge.open(dataDirectory: dataDirectory)
-        }.value
-        isLoading = false
-        if let error {
+    /// 打开词表。失败后键盘再次出现时允许重试。
+    func load(dataDirectory: URL) {
+        guard phase != .ready else { return }
+        if let error = bridge.open(dataDirectory: dataDirectory) {
             phase = .failed(error)
         } else {
             phase = .ready
-            // 加载期间按过「中/英」只改了 Swift 侧，先把规则层切到同一模式再同步。
+            // 打开失败期间按过「中/英」只改了 Swift 侧，先把规则层切到同一模式再同步。
             if var current = bridge.current() {
                 if current.isEnglish != (mode == .english) {
                     current = bridge.toggleMode()
@@ -227,12 +218,9 @@ final class KeyboardModel {
         return apply(bridge.toggleFullWidth())
     }
 
-    /// 清空当前组合，不删除已经上屏的文本。加载中不碰规则层：打开词表持锁，
-    /// 主线程会一直等到加载结束。
+    /// 清空当前组合，不删除已经上屏的文本。
     func reset() {
-        if phase == .ready {
-            bridge.reset()
-        }
+        bridge.reset()
         preedit = ""
         candidates = []
         shift = .off

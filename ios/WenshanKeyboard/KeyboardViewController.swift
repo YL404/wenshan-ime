@@ -167,9 +167,6 @@ final class KeyboardViewController: UIInputViewController {
             self?.setOverlay(.none)
             self?.dismissKeyboard()
         }
-        toolbarBar.setStatus("加载中…")
-        toolbarBar.setFullWidth(model.fullWidth)
-        toolbarBar.setFullWidthEnabled(false)
         candidateBar.setCandidates([])
 
         candidatePanel.isHidden = true
@@ -365,12 +362,9 @@ final class KeyboardViewController: UIInputViewController {
     private func loadEngine() {
         let directory = AppGroup.keyboardDataDirectory()
         keyboardLog.info("loadEngine data=\(directory.path, privacy: .public)")
-        Task { [weak self] in
-            await self?.model.load(dataDirectory: directory)
-            if case .failed(let reason) = self?.model.phase {
-                keyboardLog.error("engine failed: \(reason, privacy: .public)")
-            }
-            self?.render()
+        model.load(dataDirectory: directory)
+        if case .failed(let reason) = model.phase {
+            keyboardLog.error("engine failed: \(reason, privacy: .public)")
         }
     }
 
@@ -393,8 +387,6 @@ final class KeyboardViewController: UIInputViewController {
         candidateBar.isHidden = !composing
 
         switch model.phase {
-        case .loading:
-            toolbarBar.setStatus("加载中…")
         case .failed(let reason):
             toolbarBar.setStatus("词表加载失败", isError: true, hint: reason)
         case .ready:

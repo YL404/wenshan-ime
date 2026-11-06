@@ -23,11 +23,11 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
   - `Assets.xcassets`：App 图标。`swift/Sources/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
   - `ContentView.swift`：启用说明、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
-  - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开词表在
-    后台，其余按键在主线程，一把锁串起来。光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
+  - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开词表只是
+    mmap 加校验文件头，和按键一样在主线程，不加锁。光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
   - `KeyboardModel.swift`：Swift 侧只保留 Shift 状态和宿主上下文；拼音组合、
     标点、中英模式、临时英文、空格/回车/退格和自动补空格在 `WenshanCore`。
-  - `KeyboardComponents.swift`：尺寸和按键；`CandidateViews.swift`：空闲工具栏、候选条、全量候选网格；`SymbolPanelView.swift`：分类符号面板；`TextGridView.swift`：两个面板共用的分列网格；iOS 26 关闭候选条与网格的 scroll edge effect，否则文字会被边缘模糊盖住。
+  - `KeyboardComponents.swift`：尺寸和按键；`CandidateViews.swift`：空闲工具栏、候选条、全量候选网格；`SymbolPanelView.swift`：分类符号面板；`TextGridView.swift`：两个面板共用的分列网格；候选条与网格关闭了 scroll edge effect，否则文字会被边缘模糊盖住。
   - `KeyboardViewController.swift`：生命周期、布局、渲染，以及按键动作（`KeyAction`）的分发。
   - `KeyRows.swift`：按尺寸建字母页和数字页的键区，把每个键接到一个 `KeyAction`。
   - `DocumentWriter.swift`：往宿主正文写 marked text、上屏、删除和移光标的唯一入口。
@@ -110,7 +110,8 @@ function run([udid, developerDir]) {
 聚焦测试输入框，用 `argent run describe` 取按键坐标或直接用可访问标识。
 
 整套流程可以无头跑，不要打开 Simulator 前台。2026-11 实测：无头模拟器里点 `nihk` +
-空格，测试输入框上屏「你好」，候选条正常。
+空格，测试输入框上屏「你好」，候选条正常。连续点击间隔 1.2 秒以内时 argent 会丢键，
+每次点击后等 2.5 秒才稳定；跑过 `xcodebuild test` 后 `describe` 读不到元素，要重启模拟器。
 
 ## 内存
 
