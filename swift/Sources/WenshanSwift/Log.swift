@@ -1,7 +1,6 @@
 import Foundation
 
-/// 输入法由系统启动，没有终端，日志写到文件里。
-/// 和 Go 版分开，方便并存测试时对照。
+/// 输入法由系统启动，没有终端，日志追加写到文件里，重启后还能看到上次崩溃前的记录。
 @MainActor
 final class Log {
     static let shared = Log()
@@ -12,9 +11,12 @@ final class Log {
     private init() {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Wenshan.log")
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        // createFile 遇到已有文件会清空它，只在文件不存在时才建。
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
         handle = try? FileHandle(forWritingTo: url)
-        handle?.seekToEndOfFile()
+        _ = try? handle?.seekToEnd()
         formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
     }
