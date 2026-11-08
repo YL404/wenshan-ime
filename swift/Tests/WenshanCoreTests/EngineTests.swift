@@ -758,4 +758,49 @@ final class EngineTests: XCTestCase {
         typeKeys(e, "nihkwomn")
         XCTAssertNotEqual(e.candidates.first?.text, "我民")
     }
+
+    /// 上一个上屏词的末字和当前候选组成二元接续，学过几次就能把同音词提前。
+    func testBigramContextReranks() {
+        let d = buildDict([
+            Entry(code: "womf", text: "我们", weight: 5000),
+            Entry(code: "ni", text: "尼", weight: 5000),
+            Entry(code: "ni", text: "你", weight: 4000),
+        ])
+        let e = Engine(dict: d)
+        e.setFreq(Freq(pairs: ["们\t你": 5]))
+        typeKeys(e, "womf")
+        XCTAssertEqual(e.candidates.first?.text, "我们")
+        XCTAssertTrue(e.select(0).1)  // 上屏「我们」，上下文变成末字「们」
+        typeKeys(e, "ni")
+        XCTAssertEqual(e.candidates.first?.text, "你")
+
+        // 没有接续数据时仍按词库权重排。
+        let e2 = Engine(dict: d)
+        e2.setFreq(Freq())
+        typeKeys(e2, "ni")
+        XCTAssertEqual(e2.candidates.first?.text, "尼")
+    }
+
+    /// 二元接续和词频一起落盘，重新读入后仍在。
+    func testBigramSaveLoad() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("freq.tsv").path
+        let d = buildDict([
+            Entry(code: "womf", text: "我们", weight: 5000),
+            Entry(code: "ni", text: "你", weight: 4000),
+        ])
+        let e = Engine(dict: d)
+        e.setFreq(Freq.load(path))
+        typeKeys(e, "womf")
+        XCTAssertTrue(e.select(0).1)
+        typeKeys(e, "ni")
+        XCTAssertTrue(e.select(0).1)
+        try e.save(force: true)
+        let got = Freq.load(path)
+        XCTAssertEqual(got.count("我们"), 1)
+        XCTAssertEqual(got.count("你"), 1)
+        XCTAssertEqual(got.pairs["们\t你"], 1)
+        XCTAssertEqual(got.pairs.count, 1)
+    }
 }
