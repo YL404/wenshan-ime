@@ -709,4 +709,53 @@ final class EngineTests: XCTestCase {
             XCTAssertNotEqual(i, 0, "纠错句抢了首位: \(candidateTexts(e.candidates))")
         }
     }
+
+    /// 四键辅码单字和二字词撞码时，词库里的真词仍应排在首位。
+    func testAuxDoesNotStealExactWord() {
+        let d = buildDict([
+            Entry(code: "aj", text: "安", weight: 1000),
+            Entry(code: "ajdi", text: "广", weight: 374_959),
+            Entry(code: "ajdi", text: "暗地", weight: 9825),
+            Entry(code: "ajdi", text: "案底", weight: 4151),
+        ])
+        let e = Engine(dict: d)
+        typeKeys(e, "ajdi")
+        XCTAssertEqual(e.candidates.first?.text, "暗地")
+    }
+
+    /// 组句拼出来的串不能压过词库里同编码的真实词，哪怕真词权重很低。
+    func testComposeDoesNotOutrankExactWord() {
+        let d = buildDict([
+            Entry(code: "wo", text: "我", weight: 20_000_000),
+            Entry(code: "da", text: "打", weight: 20_000_000),
+            Entry(code: "woda", text: "握打", weight: 1),
+        ])
+        let e = Engine(dict: d)
+        typeKeys(e, "woda")
+        XCTAssertEqual(e.candidates.first?.text, "握打")
+    }
+
+    /// 先选多字词再连选单字时，自造词的编码只能覆盖那几个单字。
+    func testUserDictCodeMatchesPickedText() {
+        let d = buildDict([
+            Entry(code: "nihk", text: "你好", weight: 900),
+            Entry(code: "wo", text: "我", weight: 800),
+            Entry(code: "mn", text: "民", weight: 700),
+        ])
+        let u = UserDict(entries: [])
+        let e = Engine(dict: d)
+        e.setUserDict(u)
+        typeKeys(e, "nihkwomn")
+        for want in ["你好", "我", "民"] {
+            guard let idx = findText(e, want) else { return XCTFail("选不到 \(want)") }
+            XCTAssertTrue(e.select(idx).1)
+        }
+        XCTAssertEqual(u.count, 1)
+        XCTAssertEqual(u.entries.first?.code, "womn")
+        XCTAssertEqual(u.entries.first?.text, "我民")
+        // 整段编码不该被这条错绑的自造词抢首位。
+        e.reset()
+        typeKeys(e, "nihkwomn")
+        XCTAssertNotEqual(e.candidates.first?.text, "我民")
+    }
 }

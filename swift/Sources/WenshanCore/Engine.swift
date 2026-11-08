@@ -26,9 +26,10 @@ public final class Engine {
     var cands: [Candidate] = []
     var page = 0
 
-    /// 自造词的学习状态：本次组合输入过的全部按键、连续单字选出来的文字。
-    var session: [UInt8] = []
+    /// 自造词的学习状态：连续单字选出来的文字，以及这些字实际占用的编码。
+    /// 只记连续单字那一段，前面选过的多字词不能算进它的编码里。
     var picked: [UInt8] = []
+    var pickedCode: [UInt8] = []
     var singles = 0
 
     /// 建立引擎。dict 可以为 nil，此时只做缓冲管理（用于纯按键测试）。
@@ -87,12 +88,11 @@ public final class Engine {
     public func type(_ ch: UInt8) -> Bool {
         if buf.count >= maxBuf { return false }
         if buf.isEmpty {
-            session.removeAll(keepingCapacity: true)
             picked.removeAll(keepingCapacity: true)
+            pickedCode.removeAll(keepingCapacity: true)
             singles = 0
         }
         buf.append(ch)
-        session.append(ch)
         refresh()
         return true
     }
@@ -113,8 +113,8 @@ public final class Engine {
         exhausted = false
         cands = []
         page = 0
-        session.removeAll(keepingCapacity: true)
         picked.removeAll(keepingCapacity: true)
+        pickedCode.removeAll(keepingCapacity: true)
         singles = 0
     }
 
@@ -147,22 +147,25 @@ public final class Engine {
         if used > buf.count { used = buf.count }
         freq?.bump(text)
         // 连续单字选词说明词库里没有这个词，组合结束后记成自造词。
+        // 编码只取这串单字自己占用的按键，不能带上前面选过的多字词。
         if c.codeLen == 2 {
             singles += 1
             picked.append(contentsOf: text.utf8)
+            pickedCode.append(contentsOf: buf.prefix(used))
         } else {
             singles = 0
             picked.removeAll(keepingCapacity: true)
+            pickedCode.removeAll(keepingCapacity: true)
         }
         buf.removeFirst(used)
         if buf.isEmpty {
-            if singles >= 2 && session.count >= 4 {
+            if singles >= 2 && pickedCode.count >= 4 {
                 user?.add(
-                    code: String(decoding: session, as: UTF8.self),
+                    code: String(decoding: pickedCode, as: UTF8.self),
                     text: String(decoding: picked, as: UTF8.self))
             }
-            session.removeAll(keepingCapacity: true)
             picked.removeAll(keepingCapacity: true)
+            pickedCode.removeAll(keepingCapacity: true)
             singles = 0
         }
         refresh()

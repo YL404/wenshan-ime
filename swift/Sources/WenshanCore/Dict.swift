@@ -71,13 +71,15 @@ struct AltText {
     var weight: UInt32
 }
 
-// 候选分四层：编码刚好用完缓冲的最优先（打 ni 给「你」，打 nihk 给「你好」），
-// 其次是还没打完的长词（打 wofax 给「我发现」），再次是只用掉前几个键的短词。
+// 候选分五层：编码刚好用完缓冲的最优先（打 ni 给「你」，打 nihk 给「你好」），
+// 其次是组句拼出来的整句，再次是还没打完的长词，最后是用掉前几个键的短词。
+// 组句不是词库里的词，单列一层，免得它按合成权重压过同编码的真实词。
 // 层号放在高位，层内按词频排。tierTypo 留给纠错候选，永远在正常候选之后。
 let tierTypo = 0
 let tierShort = 1
 let tierLong = 2
-let tierExact = 3
+let tierCompose = 3
+let tierExact = 4
 
 @inline(__always)
 func candidateScore(_ weight: UInt32, _ codeLen: Int, _ bufLen: Int) -> Int64 {
@@ -289,7 +291,7 @@ extension Dict {
             let codeLen = codeRange(raw, i).length
             best = offer(
                 raw, best, i, codeLen,
-                lookupScore(weight(raw, i), codeLen, prefix.count), limit, f)
+                lookupScore(weight(raw, i), codeLen, prefix.count), prefix.count, limit, f)
             i += 1
         }
         return best
@@ -305,7 +307,7 @@ extension Dict {
             guard codeEquals(raw, i, code) else { break }
             best = offer(
                 raw, best, i, code.count,
-                lookupScore(weight(raw, i), code.count, bufLen), limit, f)
+                lookupScore(weight(raw, i), code.count, bufLen), bufLen, limit, f)
             i += 1
         }
         return best
@@ -316,13 +318,20 @@ extension Dict {
     /// 复制词条文本，省掉热路径上的绝大部分分配。
     func offer(
         _ raw: UnsafeRawBufferPointer, _ best: [Candidate], _ i: Int, _ codeLen: Int,
-        _ base: Int64, _ limit: Int, _ f: Freq?
+        _ base: Int64, _ bufLen: Int, _ limit: Int, _ f: Freq?
     ) -> [Candidate] {
         if !admits(best, limit, base + (f?.maxBoost ?? 0), codeLen) {
             return best
         }
         let (off, len) = textRange(raw, i)
-        let score = base + (f?.boost(raw, off, len) ?? 0)
+        // 辅码单字是「单字加部首码」，不是词。四键辅码会和二字词编码撞在一起，
+        // 整段匹配时不能按词频压过真词，把它降到「还没打完的词」那一层；
+        // 短匹配和前缀匹配本来就在那一层，保持不变。
+        let aux = codeLen > 2 && runeCount(raw, off, len) == 1
+        let adjusted = aux && codeLen == bufLen
+            ? (Int64(tierLong) << 40 | Int64(weight(raw, i)))
+            : base
+        let score = adjusted + (f?.boost(raw, off, len) ?? 0)
         if !admits(best, limit, score, codeLen) {
             return best
         }
@@ -511,10 +520,11 @@ extension Dict {
                 bytes.append(contentsOf: a.text.utf8)
                 sum += log(Double(a.weight) + 1)
             }
-            // 折算回「单个词」的权重量级，方便和词典里的词一起排序。
+            // 折算回「单个词」的权重量级，方便和同层候选排序；组句单列一层，
+            // 词库里真实存在的整段词始终排在它前面。
             let w = exp(sum - segmentPenalty * Double(ends.count) + segmentPenalty) - 1
             let text = String(decoding: bytes, as: UTF8.self)
-            let score = candidateScore(clampWeight(w), p.count, p.count) + (freq?.boost(text) ?? 0)
+            let score = (Int64(tierCompose) << 40 | Int64(clampWeight(w))) + (freq?.boost(text) ?? 0)
             out = insertCandidate(out, Candidate(text, p.count, score), limit)
         }
         emit(-1, AltText(text: "", weight: 0))
