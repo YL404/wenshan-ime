@@ -5,7 +5,8 @@
 
 ## 结构
 
-- `Sources/WenshanCore/`：中文词表、英文词表、自然码、组句、纠错、词频、输入规则；iOS 键盘也直接链接它
+- `Sources/WenshanCore/`：中文词表、英文词表、自然码、组句、纠错、词频、输入规则；iOS 键盘也直接链接它。
+  组句按「前段末字 → 本段」接续选词，英文候选由独立词表按小写编码查询，大小写按输入推导
 - `Sources/WenshanSwift/`
   - `main.swift`：NSApplication + IMKServer，以及 `--register` / `--swap` /
     `--select` / `--enable` / `--disable` 安装和修复子命令
@@ -70,6 +71,7 @@ swift test -c release --filter RealDictTests
 - 候选窗：`nihk` 的 9 个候选、首位高亮、右端页码提示。
 - TextEdit 端到端：`nihk` + 空格 → 你好；`ni` + 逗号 → 你，；`nihk` + PageDown
   + 空格 → 第二页首选；数字选词；回车原样上屏；`[` 取首字；`hello` 候选第 2 位
-  出 `hello`；Shift+H 接着打 `ello` 出 `Hello`；Esc 取消组合。
+  出 `hello`；Shift+H 接着打 `ello` 出 `Hello`；`i` + Shift+P + `hone` 出 `iPhone`；
+  Esc 取消组合。
 - 升级后重新选中自己（客户端重连）正常。
 - iOS 键盘扩展直接链接 `WenshanCore`；无头模拟器里点 `nihk` + 空格上屏「你好」。
