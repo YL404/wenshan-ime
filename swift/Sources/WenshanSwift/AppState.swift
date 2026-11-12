@@ -90,7 +90,7 @@ final class AppState {
         if debugKeys {
             Log.shared.write(
                 "key type=\(type.rawValue) code=\(event.keyCode) mods=\(mods.rawValue) "
-                    + "mode=\(session.currentMode) buf=\(session.buffer)")
+                    + "mode=\(session.currentMode) buf=\(session.preedit)")
         }
 
         if type == .flagsChanged {
