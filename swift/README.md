@@ -5,7 +5,7 @@
 
 ## 结构
 
-- `Sources/WenshanCore/`：词表、自然码、组句、纠错、词频、输入规则；iOS 键盘也直接链接它
+- `Sources/WenshanCore/`：中文词表、英文词表、自然码、组句、纠错、词频、输入规则；iOS 键盘也直接链接它
 - `Sources/WenshanSwift/`
   - `main.swift`：NSApplication + IMKServer，以及 `--register` / `--swap` /
     `--select` / `--enable` / `--disable` 安装和修复子命令
@@ -13,7 +13,8 @@
   - `AppState.swift`：按键分类、上屏、预编辑、光标、Shift 和模式提示
   - `CandidateWindow.swift`：NSPanel 候选条和模式 HUD
   - `InputSource.swift`：TIS 注册、选中、启用、移除、原子交换 bundle
-- `Sources/dictgen/`：把 Rime 词库和单字辅码表编译成 `dict.bin`；同一份输入每次生成的文件逐字节相同
+- `Sources/dictgen/`：把 Rime 中文词库和单字辅码表编译成 `dict.bin`，把 rime-ice 英文词库
+  编译成 `english.bin`；同一份输入每次生成的文件逐字节相同
 - `Sources/icon/`：画 App 图标、输入源图标和 iOS AppIcon，扫描线填充，不依赖绘图库
 - `Resources/`：Info.plist 和输入源本地化名
 - `scripts/`：构建、安装
@@ -43,6 +44,8 @@ sh scripts/fetch-dict.sh
 swift run -c release --package-path swift dictgen -o dict.bin \
 	-aux build/aux/moqi_aux_code.txt \
 	build/rime-ice/8105.dict.yaml build/rime-ice/base.dict.yaml build/rime-ice/others.dict.yaml
+swift run -c release --package-path swift dictgen -english -o english.bin \
+	build/rime-ice/en.dict.yaml build/rime-ice/en_ext.dict.yaml
 swift run -c release --package-path swift icon \
 	-out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset -preview assets/icon.png
 ```
@@ -66,7 +69,7 @@ swift test -c release --filter RealDictTests
   `icon` 生成的图标和 Go 版逐像素对比，最大差 1/255（PNG 编码器的取整差异）。
 - 候选窗：`nihk` 的 9 个候选、首位高亮、右端页码提示。
 - TextEdit 端到端：`nihk` + 空格 → 你好；`ni` + 逗号 → 你，；`nihk` + PageDown
-  + 空格 → 第二页首选；数字选词；回车原样上屏；`[` 取首字；`ni` + Shift+A +
-  空格 → `niA `；Esc 取消组合。
+  + 空格 → 第二页首选；数字选词；回车原样上屏；`[` 取首字；`hello` 候选第 2 位
+  出 `hello`；Shift+H 接着打 `ello` 出 `Hello`；Esc 取消组合。
 - 升级后重新选中自己（客户端重连）正常。
 - iOS 键盘扩展直接链接 `WenshanCore`；无头模拟器里点 `nihk` + 空格上屏「你好」。

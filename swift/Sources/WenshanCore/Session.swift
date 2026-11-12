@@ -34,8 +34,9 @@ public final class Session {
     var fullWidth = true
     var punctAlt = [Bool](repeating: false, count: 128)
     var lookbehind: (() -> Unicode.Scalar?)?
-    var inline = ""
-    var inlineSp = false
+    /// 当前缓冲是不是从 Shift+大写字母开始的英文段。英文查询和大小写推导
+    /// 都看它；普通拼音输入不查英文词表，避免中文候选被英文刷屏。
+    var englishRun = false
 
     /// 建立规则状态机。eng 可以为 nil，此时只做缓冲和标点规则（用于测试）。
     public init(eng: Engine?) {
@@ -50,7 +51,8 @@ public final class Session {
 
     public var currentMode: Mode { mode }
     public var isFullWidth: Bool { fullWidth }
-    public var inlineText: String { inline }
+    /// 兼容旧壳：不再有独立临时英文串，组合态一律由缓冲表示。
+    public var inlineText: String { "" }
 
     /// 当前拼音缓冲。
     public var buffer: String {
@@ -60,7 +62,6 @@ public final class Session {
 
     /// 应该显示为预编辑的串：临时英文优先，否则是拼音缓冲。
     public var preedit: String {
-        if !inline.isEmpty { return inline }
         return buffer
     }
 
@@ -90,51 +91,38 @@ public final class Session {
         Result(text: text, consumed: consumed, mode: mode, fullWidth: fullWidth)
     }
 
-    /// 追加一个字母。临时英文存在时原样追加，否则进入拼音缓冲。
+    /// 追加一个字母。英文段里保留大小写，拼音输入归一成小写。
     @discardableResult
     public func type(_ ch: UInt8) -> Result {
-        if !inline.isEmpty {
-            inline += String(decoding: [ch], as: UTF8.self)
-            return result("", true)
-        }
-        if mode != .chinese || eng == nil {
-            return result("", false)
-        }
+        guard mode == .chinese, let eng else { return result("", false) }
         var c = ch
-        if c >= UInt8(ascii: "A") && c <= UInt8(ascii: "Z") {
+        if !englishRun, c >= UInt8(ascii: "A"), c <= UInt8(ascii: "Z") {
             c += UInt8(ascii: "a") - UInt8(ascii: "A")
         }
-        guard let eng, eng.type(c) else { return result("", false) }
+        guard eng.type(c) else { return result("", false) }
+        eng.englishQuery = true
         return result("", true)
     }
 
-    /// 中文态按住 Shift 打大写字母：没有缓冲时直接上屏，正在打拼音时把已打
-    /// 编码接进临时英文串，再从这字母继续。
+    /// 中文态 Shift+字母：不再直接上屏，一律进入组合缓冲作为英文段的起点。
+    /// 后续字母保留大小写，英文词表按小写编码查询，显示时按段首大小写推导。
     @discardableResult
     public func shiftLetter(_ ch: UInt8) -> Result {
         var c = ch
         if c >= UInt8(ascii: "a") && c <= UInt8(ascii: "z") {
             c -= UInt8(ascii: "a") - UInt8(ascii: "A")
         }
-        let text = String(decoding: [c], as: UTF8.self)
-        if !inline.isEmpty {
-            inline += text
-            return result("", true)
-        }
         if mode != .chinese {
-            return direct(text)
+            return direct(String(decoding: [c], as: UTF8.self))
         }
         if !buffer.isEmpty {
-            inline = buffer + text
-            inlineSp = classBefore("") == .cjk
+            // 已有拼音缓冲时另起一段英文，不再把拼音编码接到英文词里。
             eng?.reset()
-            return result("", true)
         }
-        var out = text
-        if classBefore("") == .cjk {
-            out = " " + out
-        }
-        return result(out, true)
+        guard let eng, eng.type(c) else { return result("", false) }
+        englishRun = true
+        eng.englishQuery = true
+        return result("", true)
     }
 
     /// 直接插入一段固定文本（iOS 的英文字母、数字键、符号页）。组合中的候选
@@ -147,38 +135,24 @@ public final class Session {
         return result(commitText(out, text), true)
     }
 
-    /// 空格：临时英文结束并补空格；有候选选首选；否则原样上屏。
-    /// 没有任何组合时返回 Consumed=false，让平台自己插入空格。
+    /// 空格：有候选选首选；否则原样上屏。没有任何组合时返回 Consumed=false。
     public func space() -> Result {
-        if !inline.isEmpty {
-            return result(commitInline("", true), true)
-        }
         if mode == .chinese && !buffer.isEmpty {
             return result(commitPending(), true)
         }
         return result("", false)
     }
 
-    /// 回车：临时英文不补空格结束；有缓冲时把编码原样上屏。
-    /// 没有组合时返回 Consumed=false，让平台按自己的语义换行。
+    /// 回车：有缓冲时把编码原样上屏（中文态直接打英文的逃生口）。
     public func returnKey() -> Result {
-        if !inline.isEmpty {
-            // 回车结束不补空格，后面紧接中文也不自动加。
-            return result(commitInline("", false), true)
-        }
         if mode == .chinese && !buffer.isEmpty {
             return result(commitRaw(""), true)
         }
         return result("", false)
     }
 
-    /// 删除临时英文或拼音缓冲的一格；没有组合时交给平台删正文。
+    /// 删除拼音缓冲的一格；没有组合时交给平台删正文。
     public func backspace() -> Result {
-        if !inline.isEmpty {
-            inline.removeLast()
-            if inline.isEmpty { inlineSp = false }
-            return result("", true)
-        }
         if mode == .chinese && !buffer.isEmpty {
             _ = eng?.backspace()
             return result("", true)
@@ -186,15 +160,11 @@ public final class Session {
         return result("", false)
     }
 
-    /// 取消临时英文或当前拼音组合。
+    /// 取消当前组合。
     public func escape() -> Result {
-        if !inline.isEmpty {
-            inline = ""
-            inlineSp = false
-            return result("", true)
-        }
         if !buffer.isEmpty {
             eng?.reset()
+            englishRun = false
             return result("", true)
         }
         return result("", false)
@@ -202,9 +172,6 @@ public final class Session {
 
     /// 翻页。候选为空时返回 Consumed=false；到边界仍算消费，避免 = / - 上屏。
     public func page(_ delta: Int) -> Result {
-        if !inline.isEmpty {
-            return result(commitInline("", false), false)
-        }
         guard let eng, !eng.candidates.isEmpty else { return result("", false) }
         _ = eng.page(delta)
         return result("", true)
@@ -250,12 +217,7 @@ public final class Session {
 
     /// 处理交给应用的按键：先把组合上屏，再按光标前的字符决定要不要补空格。
     public func passthrough(_ ch: UInt8) -> Result {
-        var out: String
-        if ch >= 0x20 {
-            out = commitPending()
-        } else {
-            out = commitInline("", false)
-        }
+        var out = commitPending()
         if isASCIIAlnum(ch) && classBefore(out) == .cjk {
             out += " "
         }
@@ -264,7 +226,7 @@ public final class Session {
 
     /// 切换中英模式。切到英文时把没上屏的拼音原样打出去。
     public func toggleMode() -> Result {
-        var out = commitInline("", false)
+        var out = ""
         if mode == .chinese {
             out = commitRaw(out)
             mode = .english
@@ -280,12 +242,6 @@ public final class Session {
         return result("", true)
     }
 
-    /// 结束临时英文。trailingSpace 为 true 时补一个空格。
-    public func commitInline(_ trailingSpace: Bool) -> Result {
-        if inline.isEmpty { return result("", false) }
-        return result(commitInline("", trailingSpace), true)
-    }
-
     /// 把未完成的输入上屏并清干净，用于停用输入法或应用主动结束输入。
     public func finish() -> Result {
         let out = commitPending()
@@ -296,23 +252,21 @@ public final class Session {
     /// 清空当前组合，不删除已经上屏的文本，也不改变中英模式和全半角。
     public func reset() {
         eng?.reset()
-        inline = ""
-        inlineSp = false
+        englishRun = false
     }
 
     // 下面的上屏辅助函数都接收 pending：本次动作已经拼好、还没写进宿主的
     // 文本，返回追加之后的结果。补空格和数字后半角句号要看「光标前一个
     // 字符」，pending 非空时那个字符是 pending 的末尾。
 
-    /// 结束临时英文，再把拼音缓冲的首选上屏；没有候选时把编码原样上屏。
+    /// 把拼音缓冲的首选上屏；没有候选时把编码原样上屏。
     func commitPending() -> String {
-        let out = commitInline("", false)
-        if buffer.isEmpty { return out }
+        if buffer.isEmpty { return "" }
         if let eng {
             let (text, ok) = eng.select(0)
-            if ok { return commitText(out, text) }
+            if ok { return commitText("", text) }
         }
-        return commitRaw(out)
+        return commitRaw("")
     }
 
     /// 上屏一段文字，并在中文紧跟英文/数字时补一个空格。
@@ -329,21 +283,11 @@ public final class Session {
         let buf = buffer
         if buf.isEmpty { return pending }
         eng?.reset()
+        englishRun = false
         if classBefore(pending) == .cjk {
             return pending + " " + buf
         }
         return pending + buf
-    }
-
-    /// 把临时英文串上屏。空格结束补一个空格；回车结束不补。
-    func commitInline(_ pending: String, _ trailingSpace: Bool) -> String {
-        if inline.isEmpty { return pending }
-        var text = inline
-        if inlineSp { text = " " + text }
-        if trailingSpace { text += " " }
-        inline = ""
-        inlineSp = false
-        return pending + text
     }
 
     /// 光标前一个字符：pending 非空时取它的末字，否则问宿主正文。

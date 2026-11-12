@@ -4,7 +4,8 @@ set -eu
 cd "$(dirname "$0")/.."
 out=build/rime-ice
 mkdir -p "$out"
-for f in cn_dicts/8105.dict.yaml cn_dicts/base.dict.yaml cn_dicts/others.dict.yaml; do
+for f in cn_dicts/8105.dict.yaml cn_dicts/base.dict.yaml cn_dicts/others.dict.yaml \
+	en_dicts/en.dict.yaml en_dicts/en_ext.dict.yaml; do
 	target="$out/$(basename "$f")"
 	[ -s "$target" ] && continue
 	echo "下载 $f"

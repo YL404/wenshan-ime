@@ -119,34 +119,34 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(s.direct("。").text, "你。")
     }
 
-    func testTempEnglish() {
+    func testShiftLetterEntersBuffer() {
         let s = Session(eng: Engine(dict: nil))
-        typeKeys(s, "ni")
         let r = s.shiftLetter(UInt8(ascii: "A"))
         XCTAssertEqual(r.text, "")
-        XCTAssertEqual(s.preedit, "niA")
-        _ = s.type(UInt8(ascii: "B"))
-        XCTAssertEqual(s.preedit, "niAB")
-        XCTAssertEqual(s.space().text, "niAB ")
+        XCTAssertEqual(s.preedit, "A")
+        // 后续小写字母原样接续，大小写保留在预编辑里供大小写推导。
+        typeKeys(s, "bc")
+        XCTAssertEqual(s.preedit, "Abc")
+        XCTAssertEqual(s.returnKey().text, "Abc")
         XCTAssertEqual(s.preedit, "")
     }
 
-    func testReturnInline() {
+    func testReturnRawEnglish() {
         let s = Session(eng: Engine(dict: nil))
-        typeKeys(s, "ni")
         _ = s.shiftLetter(UInt8(ascii: "A"))
+        typeKeys(s, "bc")
         let r = s.returnKey()
-        XCTAssertEqual(r.text, "niA")
+        XCTAssertEqual(r.text, "Abc")
         XCTAssertTrue(r.consumed)
     }
 
-    func testPageCommitsInline() {
+    func testPageKeepsEnglishComposition() {
         let s = Session(eng: Engine(dict: nil))
-        typeKeys(s, "ni")
         _ = s.shiftLetter(UInt8(ascii: "A"))
         let r = s.page(1)
-        XCTAssertEqual(r.text, "niA")
+        XCTAssertEqual(r.text, "")
         XCTAssertFalse(r.consumed)
+        XCTAssertEqual(s.preedit, "A")
     }
 
     func testPassthroughCommitsPending() {
@@ -158,22 +158,23 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(s.buffer, "")
     }
 
-    func testShiftLetterNoBuffer() {
+    func testShiftLetterNoBufferGoesToCandidates() {
         let (s, _) = withDoc("我")
-        XCTAssertEqual(s.shiftLetter(UInt8(ascii: "A")).text, " A")
+        let r = s.shiftLetter(UInt8(ascii: "A"))
+        XCTAssertEqual(r.text, "")
+        XCTAssertEqual(s.preedit, "A")
     }
 
-    func testBackspaceInline() {
+    func testBackspaceEnglishBuffer() {
         let s = Session(eng: Engine(dict: nil))
-        typeKeys(s, "ni")
         _ = s.shiftLetter(UInt8(ascii: "A"))
-        var r = s.backspace()
-        XCTAssertTrue(r.consumed)
-        XCTAssertEqual(s.preedit, "ni")
+        typeKeys(s, "bc")
+        XCTAssertTrue(s.backspace().consumed)
+        XCTAssertEqual(s.preedit, "Ab")
         _ = s.backspace()
         _ = s.backspace()
         XCTAssertEqual(s.preedit, "")
-        r = s.backspace()
+        let r = s.backspace()
         XCTAssertFalse(r.consumed, "没有组合时退格应交给平台")
     }
 

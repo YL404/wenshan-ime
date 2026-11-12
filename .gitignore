@@ -1,5 +1,6 @@
 build/
 dict.bin
+english.bin
 .DS_Store
 
 # iOS 生成物

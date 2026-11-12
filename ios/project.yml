@@ -71,6 +71,8 @@ targets:
       - path: Shared
       - path: build/dict.bin
         buildPhase: resources
+      - path: build/english.bin
+        buildPhase: resources
     info:
       path: WenshanKeyboard/Info.plist
       properties:

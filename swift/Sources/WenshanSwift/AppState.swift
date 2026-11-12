@@ -11,6 +11,7 @@ final class AppState {
     let session: Session
     let candidates = CandidateWindow()
     let dictCount: Int
+    let englishCount: Int
     /// 词表打不开的原因。输入法是常驻进程，崩了系统会反复拉起再崩，
     /// 所以这时不退出，按无词表运行：拼音只能按原样上屏。
     let dictError: String?
@@ -40,9 +41,22 @@ final class AppState {
         }
         self.dictError = dictError
         dictCount = dict?.count ?? 0
+        var english: EnglishDict?
+        var englishCount = 0
+        if let url = Paths.englishURL() {
+            do {
+                english = try EnglishDict(
+                    data: Data(contentsOf: url, options: .mappedIfSafe))
+                englishCount = english?.count ?? 0
+            } catch {
+                Log.shared.write("英文词表加载失败: \(error)")
+            }
+        }
+        self.englishCount = englishCount
         debugKeys = FileManager.default.fileExists(atPath: Paths.debugFlag.path)
 
         engine = Engine(dict: dict)
+        if let english { engine.setEnglishDict(english) }
         engine.setFreq(Freq.load(Paths.freq.path))
         engine.setUserDict(UserDict.load(Paths.userDict.path))
         engine.setPhrases(UserDict.load(Paths.phrases.path))
@@ -61,7 +75,8 @@ final class AppState {
         if let dictError {
             Log.shared.write("\(dictError)；按无词表运行")
         } else {
-            Log.shared.write("词表 \(dictCount) 条，来自 \(Paths.dictURL()?.path ?? "?")")
+            Log.shared.write(
+                "词表 \(dictCount) 条，英文 \(englishCount) 条，来自 \(Paths.dictURL()?.path ?? "?")")
         }
         if debugKeys { Log.shared.write("调试模式：打印每个按键") }
         Log.shared.write("用户数据目录 \(Paths.appSupport.path)")
@@ -75,7 +90,7 @@ final class AppState {
         if debugKeys {
             Log.shared.write(
                 "key type=\(type.rawValue) code=\(event.keyCode) mods=\(mods.rawValue) "
-                    + "mode=\(session.currentMode) buf=\(session.buffer) inline=\(session.inlineText)")
+                    + "mode=\(session.currentMode) buf=\(session.buffer)")
         }
 
         if type == .flagsChanged {
@@ -102,16 +117,12 @@ final class AppState {
             return false
         }
 
-        // 中文态按住 Shift 打大写字母：没有缓冲时直接上屏；正在打拼音时
-        // 把已打的编码接进临时英文串，再从这字母继续。
+        // 中文态 Shift+字母一律进组合缓冲，作为英文词的起点。
         if raw >= 0x41 && raw <= 0x5A && mods.contains(.shift) {
             return commit(client, session.shiftLetter(raw))
         }
-        // Shift+空格：全角/半角标点切换。临时英文里仍然按空格结束。
+        // Shift+空格：全角/半角标点切换。
         if keyCode == keySpace && mods.contains(.shift) {
-            if !session.inlineText.isEmpty {
-                return commit(client, session.space())
-            }
             let res = session.toggleFullWidth()
             showHUD(res.fullWidth ? "全角" : "半角")
             return true
@@ -128,11 +139,6 @@ final class AppState {
         case keySpace:
             return commit(client, session.space())
         case keyTab:
-            // 临时英文里 Tab 先结束英文，再交给应用切换焦点，不补空格。
-            if !session.inlineText.isEmpty {
-                _ = commit(client, session.commitInline(false))
-                return false
-            }
             return commit(client, session.space())
         case keyPageUp:
             return page(client, -1)

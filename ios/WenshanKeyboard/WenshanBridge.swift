@@ -47,6 +47,12 @@ final class WenshanBridge {
             let data = try Data(contentsOf: url, options: .mappedIfSafe)
             let dict = try Dict(data: data)
             let eng = Engine(dict: dict)
+            if let englishURL = Bundle.main.url(forResource: "english", withExtension: "bin"),
+               let englishData = try? Data(contentsOf: englishURL, options: .mappedIfSafe),
+               let english = try? EnglishDict(data: englishData)
+            {
+                eng.setEnglishDict(english)
+            }
             let sess = Session(eng: eng)
             sess.setLookbehind { [weak self] in self?.lastRune }
             if !dataDirectory.path.isEmpty {

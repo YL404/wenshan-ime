@@ -9,9 +9,14 @@ if [ ! -f dict.bin ]; then
     echo "缺少 dict.bin，先运行 sh swift/scripts/build.sh 生成词表" >&2
     exit 1
 fi
+if [ ! -f english.bin ]; then
+    echo "缺少 english.bin，先运行 sh swift/scripts/build.sh 生成词表" >&2
+    exit 1
+fi
 
 mkdir -p ios/build
 cp dict.bin ios/build/dict.bin
+cp english.bin ios/build/english.bin
 
 cd ios
 swift run -c release --package-path ../swift icon \

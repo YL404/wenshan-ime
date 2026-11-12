@@ -114,7 +114,7 @@ final class KeyboardModel {
             return apply(bridge.direct(text))
         }
         if shift.isActive {
-            let outcome = bridge.shiftLetter(key)
+            let outcome = bridge.shiftLetter(key.uppercased())
             if shift == .once { shift = .off }
             return apply(outcome)
         }

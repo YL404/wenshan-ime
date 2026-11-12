@@ -10,6 +10,12 @@ if [ ! -f dict.bin ]; then
 		-aux build/aux/moqi_aux_code.txt \
 		build/rime-ice/8105.dict.yaml build/rime-ice/base.dict.yaml build/rime-ice/others.dict.yaml
 fi
+if [ ! -f english.bin ]; then
+	echo "缺少 english.bin，先生成英文词表" >&2
+	sh scripts/fetch-dict.sh
+	swift run -c release --package-path swift dictgen -english -o english.bin \
+		build/rime-ice/en.dict.yaml build/rime-ice/en_ext.dict.yaml
+fi
 
 swift build -c release --package-path swift --product WenshanSwift
 
@@ -19,6 +25,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp swift/.build/release/WenshanSwift "$app/Contents/MacOS/Wenshan"
 cp swift/Resources/Info.plist "$app/Contents/Info.plist"
 cp dict.bin "$app/Contents/Resources/dict.bin"
+cp english.bin "$app/Contents/Resources/english.bin"
 cp -R swift/Resources/zh-Hans.lproj swift/Resources/en.lproj "$app/Contents/Resources/"
 
 # 图标产物已经在就直接拷。

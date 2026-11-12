@@ -3,10 +3,10 @@
 Swift 规则层 + Swift 6 键盘扩展。直接复用 `swift/Sources/WenshanCore`，iOS 只负责键盘壳、共享数据和系统输入上下文。
 
 当前可用：26 键自然码、空闲工具栏/输入候选两态顶栏、候选词块与全量候选展开、长按候选取首/尾字、
-首选上屏、Shift 一次性大写与双击锁定、中英切换、临时英文、数字九宫格、分类符号面板与长按符号、
+首选上屏、Shift 一次性大写与双击锁定、中英切换、英文候选、数字九宫格、分类符号面板与长按符号、
 `returnKeyType` 标题与高亮、收起键盘、按键预览与按下缩放、删除长按连发/滑动删除、空格长按拖光标、
 快速连打顺序队列、触感（需完全访问）、iPad 分档/浮动高度、用户词频/自造词/短语
-加载。地球键只在系统要求切换输入模式时出现。标点、全半角、Shift、临时英文和自动补空格与 macOS
+加载。地球键只在系统要求切换输入模式时出现。标点、全半角、Shift、英文候选和自动补空格与 macOS
 共用 `swift/Sources/WenshanCore`，iOS 只保留触摸按键和渲染。
 
 底行按微信键盘/系统键盘的层级排：`123`、地球、句号/逗号小键、宽空格、`中/英`、发送/换行；
@@ -23,10 +23,10 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
   - `Assets.xcassets`：App 图标。`swift/Sources/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
   - `ContentView.swift`：启用说明、用户数据统计/清空、测试输入框。
 - `WenshanKeyboard/`：键盘扩展。
-  - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开词表只是
-    mmap 加校验文件头，和按键一样在主线程，不加锁。光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
+  - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开中文和英文
+    词表只是 mmap 加校验文件头，和按键一样在主线程，不加锁。光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
   - `KeyboardModel.swift`：Swift 侧只保留 Shift 状态和宿主上下文；拼音组合、
-    标点、中英模式、临时英文、空格/回车/退格和自动补空格在 `WenshanCore`。
+    标点、中英模式、英文候选、空格/回车/退格和自动补空格在 `WenshanCore`。
   - `KeyboardComponents.swift`：尺寸和按键；`CandidateViews.swift`：空闲工具栏、候选条、全量候选网格；`SymbolPanelView.swift`：分类符号面板；`TextGridView.swift`：两个面板共用的分列网格；候选条与网格关闭了 scroll edge effect，否则文字会被边缘模糊盖住。
   - `KeyboardViewController.swift`：生命周期、布局、渲染，以及按键动作（`KeyAction`）的分发。
   - `KeyRows.swift`：按尺寸建字母页和数字页的键区，把每个键接到一个 `KeyAction`。
@@ -43,7 +43,7 @@ App Group: group.im.wenshan.ios
        ├─ userdict.tsv
        └─ phrases.tsv
 WenshanKeyboard
-  ├─ 直接 mmap 扩展 Bundle 里的 dict.bin，随 App 一起更新，不整块复制
+  ├─ 直接 mmap 扩展 Bundle 里的 dict.bin 和 english.bin，随 App 一起更新，不整块复制
   └─ 用户数据写共享目录；没有完全访问时退回扩展 Documents
 ```
 
@@ -61,7 +61,7 @@ sh ios/scripts/build.sh
 
 脚本会：
 
-1. 把根目录 `dict.bin` 复制到 `ios/build/dict.bin`；
+1. 把根目录 `dict.bin` 和 `english.bin` 复制到 `ios/build/`；
 2. 用 `swift/Sources/icon` 生成 1024×1024 的 `AppIcon.png`；
 3. 用 `xcodegen` 生成 Xcode 工程（本地 Swift Package `swift/`）；
 4. 用默认 ad-hoc 签名构建模拟器 App。
@@ -130,4 +130,4 @@ function run([udid, developerDir]) {
 - 用户数据只在本地；没有 iCloud/WebDAV 同步。`phrases.tsv` 目前需要手动放到
   App Group 的 `Data/` 下，宿主还没有短语编辑器。
 - 没有 App Group 的免费签名会退回扩展自己的 Documents，主 App 看不到学习记录。
-- 词表约 17 MB，打包在扩展 Bundle 里；App 体积和扩展内存是两回事。
+- 中文词表约 17 MB、英文词表约 0.7 MB，打包在扩展 Bundle 里；App 体积和扩展内存是两回事。

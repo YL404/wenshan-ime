@@ -86,6 +86,17 @@ let tierShort = 1
 let tierLong = 2
 let tierCompose = 3
 let tierExact = 4
+/// 英文候选独占一层：精确命中排在中文首选之后，前缀补全追加在正常候选末尾。
+/// 用层号把它们和组句、词库真词隔离开，位置由 Engine 单独安插。
+let tierEnglishExact = 5
+let tierEnglishPrefix = 1
+let tierEnglishRaw = 0
+
+/// 英文候选的分数：层号占高位，权重只决定同层内的顺序。
+@inline(__always)
+func englishScore(_ tier: Int, _ weight: UInt32) -> Int64 {
+    Int64(tier) << 40 | Int64(weight)
+}
 
 @inline(__always)
 func candidateScore(_ weight: UInt32, _ codeLen: Int, _ bufLen: Int) -> Int64 {

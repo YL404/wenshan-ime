@@ -25,4 +25,17 @@ enum Paths {
         }
         return nil
     }
+
+    /// 英文词表优先取 app bundle 里的，其次退回当前目录。
+    static func englishURL() -> URL? {
+        if let url = Bundle.main.url(forResource: "english", withExtension: "bin") {
+            return url
+        }
+        let local = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("english.bin")
+        if FileManager.default.fileExists(atPath: local.path) {
+            return local
+        }
+        return nil
+    }
 }

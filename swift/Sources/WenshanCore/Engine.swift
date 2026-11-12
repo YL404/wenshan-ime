@@ -13,6 +13,7 @@ let maxCorrections = 20
 /// 持有一次输入过程的全部状态。只在主线程上被调用，不加锁。
 public final class Engine {
     let dict: Dict?
+    var english: EnglishDict?
     var freq: Freq?
     var user: UserDict?
     var phrases: UserDict?
@@ -45,6 +46,13 @@ public final class Engine {
 
     /// 挂上只读的自定义短语表。它和自造词共用格式，但不会被写回。
     public func setPhrases(_ p: UserDict) { phrases = p }
+
+    /// 挂上独立英文词表。中文态字母串会补充英文候选，不影响主词表查询。
+    public func setEnglishDict(_ d: EnglishDict) { english = d }
+
+    /// 这一轮缓冲要不要查英文词表。中文态字母输入由 Session 打开，
+    /// 纯拼音组句（例如先选词后剩余缓冲）不需要被英文候选干扰。
+    public var englishQuery = false
 
     /// 词频、自造词或短语文件被别的进程改过或删掉时（主 App 清空学习记录、
     /// 用户手动删文件、另一个键盘进程写过），丢掉内存里的副本重新读盘，
@@ -91,6 +99,7 @@ public final class Engine {
             picked.removeAll(keepingCapacity: true)
             pickedCode.removeAll(keepingCapacity: true)
             singles = 0
+            englishQuery = false
         }
         buf.append(ch)
         refresh()
@@ -113,6 +122,7 @@ public final class Engine {
         exhausted = false
         cands = []
         page = 0
+        englishQuery = false
         picked.removeAll(keepingCapacity: true)
         pickedCode.removeAll(keepingCapacity: true)
         singles = 0
@@ -167,6 +177,7 @@ public final class Engine {
             picked.removeAll(keepingCapacity: true)
             pickedCode.removeAll(keepingCapacity: true)
             singles = 0
+            englishQuery = false
         }
         refresh()
         return (text, true)
@@ -180,7 +191,8 @@ public final class Engine {
         exhausted = false
         cands = []
         page = 0
-        guard dict != nil, !buf.isEmpty else { return }
+        guard !buf.isEmpty else { return }
+        if dict == nil, english == nil { return }
         ensure(2 * pageSize)
     }
 
@@ -204,10 +216,65 @@ public final class Engine {
         if exhausted {
             normal.append(contentsOf: corrections(buf, normal))
         }
-        stream = normal
+        stream = englishCandidates(normal)
         if page * pageSize < stream.count {
             setPage(page)
         }
+    }
+
+    /// 英文候选的安插规则：精确命中整串的英文词放到中文首选之后（第 2 位），
+    /// 只匹配到前缀的补全词追加到候选末尾；两者都不命中时给一条原文兜底。
+    /// 大小写由预编辑串推导，词库里的 display 只作为基准形态。
+    func englishCandidates(_ normal: [Candidate]) -> [Candidate] {
+        guard let english, englishQuery, !buf.isEmpty else { return normal }
+        let lower = Array(String(decoding: buf, as: UTF8.self).lowercased().utf8)
+        guard lower.count >= englishMinExact,
+              lower.allSatisfy({ $0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z") })
+        else { return normal }
+        let exact = english.lookup(lower, exactOnly: true, limit: englishMaxCandidates)
+        let prefix = lower.count >= englishMinPrefix
+            ? english.lookup(lower, exactOnly: false, limit: englishMaxCandidates)
+                .filter { !$0.exact }
+            : []
+        var out = normal
+        if exact.isEmpty && prefix.isEmpty {
+            // 词表不认识这串字母：给一条原文兜底，让「中文态直接打英文」仍可选。
+            let raw = englishDisplay(String(decoding: buf, as: UTF8.self))
+            out.append(Candidate(raw, buf.count, englishScore(tierEnglishRaw, 0)))
+            return out
+        }
+        let shown = Set(exact.map { englishDisplay($0.display) })
+        var inserted = 0
+        for m in prefix where !shown.contains(englishDisplay(m.display)) {
+            out.append(Candidate(
+                englishDisplay(m.display), buf.count,
+                englishScore(tierEnglishPrefix, m.weight)))
+            inserted += 1
+            if inserted >= englishMaxCandidates { break }
+        }
+        // 插在中文首选之后；没有中文候选时英文词自然排第一。
+        var at = min(1, out.count)
+        for m in exact {
+            let text = englishDisplay(m.display)
+            out.insert(Candidate(text, buf.count, englishScore(tierEnglishExact, m.weight)), at: at)
+            at += 1
+        }
+        return out
+    }
+
+    /// 按预编辑串的大小写推导显示形态：首字母大写 → Title，前两个大写 → ALL CAPS，
+    /// 其余保持原样。词库里已带混合大小写的专名（GitHub、MacBook）原样保留。
+    func englishDisplay(_ word: String) -> String {
+        let src = String(decoding: buf, as: UTF8.self)
+        let bytes = Array(src.utf8)
+        let upperCount = bytes.prefix(2).filter {
+            $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z")
+        }.count
+        if upperCount == 2 { return word.uppercased() }
+        if let first = bytes.first, first >= UInt8(ascii: "A") && first <= UInt8(ascii: "Z") {
+            return word.prefix(1).uppercased() + word.dropFirst()
+        }
+        return word
     }
 
     /// 纠错候选，按文本去掉正常段里已有的词。只在正常段到底后调用。
