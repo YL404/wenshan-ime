@@ -8,7 +8,7 @@ private let bridgeLog = Logger(subsystem: "im.wenshan.ios.keyboard", category: "
 struct BridgeOutcome: Equatable {
     /// 要插入正文的文本，已经包含自动补的空格。
     var text: String
-    /// 预编辑串：临时英文或拼音缓冲。
+    /// 预编辑串：当前组合缓冲（拼音或英文段）。
     var preedit: String
     /// 当前页候选。
     var candidates: [String]

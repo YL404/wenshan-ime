@@ -14,7 +14,7 @@ enum KeyboardOutcome {
 }
 
 /// 键盘输入状态机：只负责 Swift 侧的 Shift 和宿主上下文。
-/// 拼音组合、标点、中英模式、临时英文和自动补空格都在共享规则层，
+/// 拼音组合、标点、中英模式、英文候选和自动补空格都在共享规则层，
 /// VC 只做渲染和按键转发。
 @MainActor
 final class KeyboardModel {
@@ -103,7 +103,7 @@ final class KeyboardModel {
         self.returnKeyType = returnKeyType
     }
 
-    /// 字母键。中文态 Shift 进入共享规则层的临时英文；英文态直接插入。
+    /// 字母键。中文态 Shift 追加到组合缓冲、按大小写出英文候选；英文态直接插入。
     func type(_ key: String) -> KeyboardOutcome {
         guard phase == .ready else {
             return direct(key)
@@ -121,7 +121,7 @@ final class KeyboardModel {
         return apply(bridge.type(key))
     }
 
-    /// 空格：共享规则层有候选或临时英文时消费，否则由键盘插入空格。
+    /// 空格：共享规则层有组合时消费，否则由键盘插入空格。
     func space() -> KeyboardOutcome {
         guard phase == .ready else { return .commit(" ") }
         let outcome = bridge.space()
