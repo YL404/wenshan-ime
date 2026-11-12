@@ -1,9 +1,9 @@
 /// 输入缓冲的上限（字节，双拼每音节两字节）。
 let maxBuf = 32
 
-/// 单键简码每个字母最多存的候选数；候选窗每页也用它。
-let maxCandidates = 9
-/// 一页的候选数，对应数字键 1-9。
+/// 单键简码每个字母最多存的候选数，也是候选页大小的上限（数字键 1-9）。
+public let maxCandidates = 9
+/// 测试代码沿用的旧常量名，值等于默认页大小。
 let pageSize = maxCandidates
 /// 只用于 iOS 键盘一次性展开全部候选的网格上限；逐页翻页不受它限制。
 let maxPages = 20
@@ -50,9 +50,70 @@ public final class Engine {
     /// 挂上独立英文词表。中文态字母串会补充英文候选，不影响主词表查询。
     public func setEnglishDict(_ d: EnglishDict) { english = d }
 
+    /// 候选长按菜单：把词置顶到当前编码，或从自造词和词频里删掉。
+    /// 改动后立刻重建候选并落盘。
+    @discardableResult
+    public func manage(_ text: String, pin: Bool) -> Bool {
+        guard !text.isEmpty else { return false }
+        var changed = false
+        if pin {
+            let code = String(decoding: buf, as: UTF8.self)
+            changed = user?.pin(text, code: code) ?? false
+        } else {
+            changed = (freq?.remove(text) ?? false) || changed
+            changed = (user?.remove(text) ?? false) || changed
+        }
+        if changed {
+            refresh()
+            try? save(force: true)
+        }
+        return changed
+    }
+
     /// 这一轮缓冲要不要查英文词表。中文态字母输入由 Session 打开，
     /// 纯拼音组句（例如先选词后剩余缓冲）不需要被英文候选干扰。
     public var englishQuery = false
+
+    /// 候选页大小（1...maxCandidates）。macOS 固定 9，iOS 按自己的偏好设置。
+    public var pageSize = maxCandidates {
+        didSet { pageSize = min(max(1, pageSize), maxCandidates) }
+    }
+
+    /// 字母键在键区坐标里的矩形，按 a...z 索引。nil 表示没有几何数据
+    /// （macOS 硬件键盘或测试），纠错退回不看落点。
+    public var keyFrames: [KeyFrame?] = Array(repeating: nil, count: 26)
+    /// 每个字母键按下时的真实落点。键区坐标，nil 表示没记录。
+    public var touchPoints: [KeyPoint?] = Array(repeating: nil, count: 26)
+
+    /// 按下字母键时记下真实落点，供纠错比较「按到的键」和「想打的键」。
+    public func setTouchPoint(_ letter: UInt8, _ point: KeyPoint?) {
+        guard let index = letterIndex(letter) else { return }
+        touchPoints[index] = point
+    }
+
+    /// 注册 26 个字母键的几何。布局变化后由平台壳整体重设。
+    public func setKeyFrames(_ frames: [KeyFrame?]) {
+        keyFrames = Array(frames.prefix(26))
+        while keyFrames.count < 26 { keyFrames.append(nil) }
+    }
+
+    /// 纠错替换 from → to 时，落点离 to 的键心比离 from 更近就加分。
+    /// 分数只影响纠错候选之间的先后，不越过正常候选。
+    public func typoBonus(_ from: UInt8, _ to: UInt8) -> Double {
+        guard let fi = letterIndex(from), let ti = letterIndex(to),
+              let point = touchPoints[fi],
+              let pressed = keyFrames[fi], let target = keyFrames[ti]
+        else { return 0 }
+        func distance(_ a: KeyPoint, _ b: KeyFrame) -> Double {
+            let dx = a.x - b.centerX
+            let dy = a.y - b.centerY
+            return (dx * dx + dy * dy).squareRoot()
+        }
+        let toPressed = distance(point, pressed)
+        let toTarget = distance(point, target)
+        let width = max(pressed.width, 1)
+        return min(4, max(0, (toPressed - toTarget) / width * 4))
+    }
 
     /// 词频、自造词或短语文件被别的进程改过或删掉时（主 App 清空学习记录、
     /// 用户手动删文件、另一个键盘进程写过），丢掉内存里的副本重新读盘，
@@ -110,6 +171,16 @@ public final class Engine {
     public func backspace() -> Bool {
         guard !buf.isEmpty else { return false }
         buf.removeLast()
+        refresh()
+        return true
+    }
+
+    /// 长按删除：一次退掉缓冲末尾一个完整音节（双拼两键）。
+    /// 末尾只剩半个音节时退掉它；缓冲空了之后不再继续删正文。
+    public func backspaceSyllable() -> Bool {
+        guard !buf.isEmpty else { return false }
+        let drop = buf.count % 2 == 0 ? 2 : 1
+        buf.removeLast(min(drop, buf.count))
         refresh()
         return true
     }
@@ -280,15 +351,27 @@ public final class Engine {
     /// 纠错候选，按文本去掉正常段里已有的词。只在正常段到底后调用。
     func corrections(_ buf: [UInt8], _ normal: [Candidate]) -> [Candidate] {
         guard let dict else { return [] }
-        var corrs = dict.corrections(buf, maxCorrections)
+        let bonus = hasTouchGeometry ? typoBonus : nil
+        var corrs = dict.corrections(buf, maxCorrections, touchBonus: bonus)
         if let alt = umlautVariant(buf) {
-            corrs = mergeCandidates(corrs, dict.corrections(alt, maxCorrections), maxCorrections)
+            corrs = mergeCandidates(
+                corrs, dict.corrections(alt, maxCorrections, touchBonus: bonus), maxCorrections)
         }
         var out: [Candidate] = []
         for c in corrs where !hasText(normal, c.text) && !hasText(out, c.text) {
             out.append(c)
         }
         return out
+    }
+
+    /// 几何全齐、且这串缓冲里的字母都有落点时，纠错才按落点加权。
+    /// 只按本次缓冲判断：没碰过的键不该让整句纠错退回不加权。
+    private var hasTouchGeometry: Bool {
+        keyFrames.allSatisfy { $0 != nil }
+            && buf.allSatisfy { letter in
+                guard let index = letterIndex(letter) else { return true }
+                return touchPoints[index] != nil
+            }
     }
 
     /// 收集一种拼写下的正常候选，最多 limit 个。

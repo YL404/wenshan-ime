@@ -72,15 +72,21 @@ func groupVariants(_ group: [UInt8]) -> [[UInt8]] {
 
 extension Dict {
     /// 返回按错一键的纠错候选：整段缓冲切成两键组，其中恰好一个组被变体替换。
-    func corrections(_ buf: [UInt8], _ limit: Int) -> [Candidate] {
+    /// touchBonus 由调用方按真实落点给「按到的键 → 想打的键」打分，
+    /// 只影响纠错路径之间的先后，不越过正常候选。
+    func corrections(
+        _ buf: [UInt8], _ limit: Int,
+        touchBonus: ((UInt8, UInt8) -> Double)? = nil
+    ) -> [Candidate] {
         guard buf.count >= 2, buf.count % 2 == 0, n > 0, limit > 0 else { return [] }
         return data.withUnsafeBytes { raw in
-            correctionsRaw(raw, buf, limit)
+            correctionsRaw(raw, buf, limit, touchBonus)
         }
     }
 
     func correctionsRaw(
-        _ raw: UnsafeRawBufferPointer, _ buf: [UInt8], _ limit: Int
+        _ raw: UnsafeRawBufferPointer, _ buf: [UInt8], _ limit: Int,
+        _ touchBonus: ((UInt8, UInt8) -> Double)?
     ) -> [Candidate] {
         let syls = buf.count / 2
 
@@ -91,6 +97,8 @@ extension Dict {
         var prev = [[Int]](repeating: [Int](repeating: -1, count: syls + 1), count: 2)
         var prevCode = [[[UInt8]?]](
             repeating: [[UInt8]?](repeating: nil, count: syls + 1), count: 2)
+        var touchScores = [[Double]](
+            repeating: [Double](repeating: 0, count: syls + 1), count: 2)
         best[0][0] = 0
 
         for i in 0..<syls {
@@ -123,11 +131,22 @@ extension Dict {
                         code.append(contentsOf: buf[((p + 1) * 2)..<(j2 * 2)])
                         let (w, found) = exactWeight(raw, code)
                         if !found { continue }
-                        let s = best[0][i] + log(Double(w) + 1) - segmentPenalty - typoPenalty
+                        var bonus = 0.0
+                        if let touchBonus {
+                            let original = buf[(p * 2)..<(p * 2 + 2)]
+                            if original[original.startIndex] != v[0] {
+                                bonus += touchBonus(original[original.startIndex], v[0])
+                            }
+                            if original[original.startIndex + 1] != v[1] {
+                                bonus += touchBonus(original[original.startIndex + 1], v[1])
+                            }
+                        }
+                        let s = best[0][i] + log(Double(w) + 1) - segmentPenalty - typoPenalty + bonus
                         if s > best[1][j2] {
                             best[1][j2] = s
                             prev[1][j2] = i
                             prevCode[1][j2] = code
+                            touchScores[1][j2] = bonus
                         }
                     }
                 }
@@ -177,7 +196,9 @@ extension Dict {
             }
             // 折算回「单个词」的权重量级，再扣一条纠错罚分；tierTypo 把
             // 纠错候选压到正常候选之后，权重只决定纠错行之间的顺序。
-            let w = exp(sum - segmentPenalty * Double(path.count) - typoPenalty + segmentPenalty) - 1
+            let w = exp(
+                sum - segmentPenalty * Double(path.count) - typoPenalty
+                    + segmentPenalty + touchScores[1][syls]) - 1
             let text = String(decoding: bytes, as: UTF8.self)
             out = insertCandidate(
                 out,

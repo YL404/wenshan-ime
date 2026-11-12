@@ -93,6 +93,23 @@ public final class Freq {
     /// 未落盘的选词是否攒够了 saveEvery 次。
     func due() -> Bool { dirty >= saveEvery }
 
+    /// 从候选菜单删词：把这个词的次数和以它为首/尾的接续一起清掉。
+    @discardableResult
+    public func remove(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let removedCounts = counts.removeValue(forKey: text) != nil
+        var removedPairs = false
+        for key in pairs.keys where key.hasSuffix("\t" + text) || key.hasPrefix(text + "\t") {
+            pairs.removeValue(forKey: key)
+            removedPairs = true
+        }
+        if removedCounts || removedPairs {
+            dirty += 1
+            return true
+        }
+        return false
+    }
+
     /// 把词频和二元接续写回磁盘，都按次数从多到少排列，超过上限的淘汰掉。
     public func save() throws {
         guard dirty > 0 else { return }
