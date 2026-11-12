@@ -801,6 +801,50 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(got.count("我们"), 1)
         XCTAssertEqual(got.count("你"), 1)
         XCTAssertEqual(got.pairs["们\t你"], 1)
-        XCTAssertEqual(got.pairs.count, 1)
+        // 上屏「我们」时顺带记下词内部的相邻字接续，组句逐段能直接用。
+        XCTAssertEqual(got.pairs["我\t们"], 1)
+        XCTAssertEqual(got.pairs.count, 2)
+    }
+
+    /// 长句组句只为最后一段出同音备选，前面各段的换字副本不再刷满首页。
+    func testComposeVariantsOnlyFromLastSegment() {
+        let d = buildDict([
+            Entry(code: "ve", text: "这", weight: 900_000),
+            Entry(code: "ve", text: "着", weight: 800_000),
+            Entry(code: "ve", text: "者", weight: 700_000),
+            Entry(code: "ge", text: "个", weight: 900_000),
+            Entry(code: "ge", text: "各", weight: 800_000),
+            Entry(code: "uuru", text: "输入", weight: 900_000),
+            Entry(code: "fa", text: "法", weight: 900_000),
+            Entry(code: "fa", text: "发", weight: 800_000),
+        ])
+        let e = Engine(dict: d)
+        typeKeys(e, "vegeuurufa")
+        let texts = candidateTexts(e.allCandidates())
+        // 首段锁定「这」，不许出现「着个…」「者个…」这类前文换字副本。
+        XCTAssertFalse(texts.contains(where: { $0.hasPrefix("着个") || $0.hasPrefix("者个") }))
+        XCTAssertTrue(texts.contains("这个输入法"))
+        // 末尾段「法/发」的换字副本仍保留，且排在主拼法后面。
+        XCTAssertTrue(texts.contains("这个输入发"))
+        let main = texts.firstIndex(of: "这个输入法") ?? Int.max
+        let variant = texts.firstIndex(of: "这个输入发") ?? Int.max
+        XCTAssertLessThan(main, variant)
+    }
+
+    /// 学过「欢→编」之后，组句末尾段换字副本能靠逐段接续翻到主拼法前面。
+    func testComposeSegmentBigramReranks() {
+        let d = buildDict([
+            Entry(code: "woxi", text: "我喜", weight: 900_000),
+            Entry(code: "hr", text: "欢", weight: 900_000),
+            Entry(code: "bm", text: "变", weight: 900_000),
+            Entry(code: "bm", text: "编", weight: 100_000),
+            Entry(code: "ig", text: "成", weight: 900_000),
+            Entry(code: "ig", text: "程", weight: 100_000),
+        ])
+        let e = Engine(dict: d)
+        let f = Freq(pairs: ["欢\t编": maxPairCount, "编\t程": maxPairCount])
+        e.setFreq(f)
+        typeKeys(e, "woxihrbmig")
+        XCTAssertEqual(e.candidates.first?.text, "我喜欢编程")
     }
 }

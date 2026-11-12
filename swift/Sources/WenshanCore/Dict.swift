@@ -25,6 +25,12 @@ let maxScan = 20_000
 let maxWordSyllables = 8
 let segmentPenalty = 20.0
 let altPerSegment = 3
+/// 组句换字副本折扣，单位是 log 权重。只给最后一段出备选，前面各段锁定
+/// 最优拼法；副本是备选而不是另一条独立句子，不该和主拼法抢同一层。
+let composeVariantPenalty = 8.0
+/// 组句逐段接续的加权，单位是 log 权重。首段接上文末字，后续段接前段末字。
+/// 单次接最大约 composePairBoost，足够在学过后把换字副本翻上来。
+let composePairBoost = 8.0
 
 public enum DictError: Error, CustomStringConvertible {
     case badHeader
@@ -431,30 +437,51 @@ extension Dict {
         let syls = p.count / 2
         let total = odd ? syls + 1 : syls
         var best = [Double](repeating: -Double.infinity, count: total + 1)
-        var prev = [Int](repeating: -1, count: total + 1)
+        var prev: [Int?] = [Int?](repeating: nil, count: total + 1)
         var segs = [Int](repeating: 0, count: total + 1)
+        var lastChar: [String?] = [String?](repeating: nil, count: total + 1)
+        /// 到达每个音节边界时选中的段写法，回溯时按边界取回。
+        var chosen: [AltText?] = [AltText?](repeating: nil, count: total + 1)
+        var lastFinal = UInt8(0)
         best[0] = 0
+
+        func edge(_ from: Int, _ to: Int, _ code: [UInt8], _ final: UInt8?) {
+            guard best[from] != -Double.infinity else { return }
+            let alts = exactAlts(raw, code, altPerSegment)
+            guard let top = alts.first else { return }
+            let previous = from == 0 ? freq?.context : lastChar[from]
+            var winner = top
+            var gain = log(Double(top.weight) + 1) + (freq?.segmentBoost(previous, top.text) ?? 0)
+            // 同一段内也按「词频 + 接上文」挑写法，接续能直接改变分段结果。
+            for alt in alts.dropFirst() {
+                let g = log(Double(alt.weight) + 1)
+                    + (freq?.segmentBoost(previous, alt.text) ?? 0)
+                if g > gain {
+                    gain = g
+                    winner = alt
+                }
+            }
+            let s = best[from] + gain - segmentPenalty
+            if s > best[to] {
+                best[to] = s
+                prev[to] = from
+                segs[to] = segs[from] + 1
+                chosen[to] = winner
+                lastChar[to] = winner.text.last.map(String.init)
+                if let final { lastFinal = final }
+            }
+        }
 
         for i in 0..<syls {
             if best[i] == -Double.infinity { continue }
             var j = i + 1
             while j <= syls && j - i <= maxWordSyllables {
-                let (w, found) = exactWeight(
-                    raw, UnsafeBufferPointer(rebasing: p[(i * 2)..<(j * 2)]))
-                if found {
-                    let s = best[i] + log(Double(w) + 1) - segmentPenalty
-                    if s > best[j] {
-                        best[j] = s
-                        prev[j] = i
-                        segs[j] = segs[i] + 1
-                    }
-                }
+                edge(i, j, Array(p[(i * 2)..<(j * 2)]), nil)
                 j += 1
             }
         }
 
         // 末尾那个声母音节：词跨 [i,total) 的编码是 buf[i*2:] 再补一个韵母键。
-        var lastFinal = UInt8(0)
         if odd {
             let from = max(0, total - maxWordSyllables)
             if from <= syls {
@@ -463,21 +490,13 @@ extension Dict {
                     var code = Array(p[(i * 2)..<p.count])
                     for f in UInt8(ascii: "a")...UInt8(ascii: "z") {
                         code.append(f)
-                        let (w, found) = exactWeight(raw, code)
+                        edge(i, total, code, f)
                         code.removeLast()
-                        if !found { continue }
-                        let s = best[i] + log(Double(w) + 1) - segmentPenalty
-                        if s > best[total] {
-                            best[total] = s
-                            prev[total] = i
-                            segs[total] = segs[i] + 1
-                            lastFinal = f
-                        }
                     }
                 }
             }
         }
-        guard prev[total] >= 0, segs[total] >= 2 else { return [] }
+        guard prev[total] != nil, segs[total] >= 2 else { return [] }
 
         // 回溯出每段的边界（以音节计）。
         var ends: [Int] = []
@@ -485,7 +504,8 @@ extension Dict {
         var i = total
         while i > 0 {
             ends.append(i)
-            i = prev[i]
+            guard let from = prev[i] else { return [] }
+            i = from
         }
         ends.reverse()
         var starts = [Int](repeating: 0, count: ends.count)
@@ -508,7 +528,12 @@ extension Dict {
             }
             let a = exactAlts(raw, code, altPerSegment)
             if a.isEmpty { return [] }
-            alts.append(a)
+            // DP 里被接续选中的写法排到该段首位，其余保持词频顺序。
+            if let pick = chosen[ends[k]] {
+                alts.append([pick] + a.filter { $0.text != pick.text })
+            } else {
+                alts.append(a)
+            }
         }
 
         var out: [Candidate] = []
@@ -520,17 +545,23 @@ extension Dict {
                 bytes.append(contentsOf: a.text.utf8)
                 sum += log(Double(a.weight) + 1)
             }
+            // 换字副本比主拼法轻一档：段内选择已经在 DP 里按词频和接续定好，
+            // 副本只作为可选的次选，不另造一条同分段句子。
+            let variant = override >= 0 ? composeVariantPenalty : 0.0
             // 折算回「单个词」的权重量级，方便和同层候选排序；组句单列一层，
             // 词库里真实存在的整段词始终排在它前面。
-            let w = exp(sum - segmentPenalty * Double(ends.count) + segmentPenalty) - 1
+            let w = exp(sum - segmentPenalty * Double(ends.count) + segmentPenalty - variant) - 1
             let text = String(decoding: bytes, as: UTF8.self)
             let score = (Int64(tierCompose) << 40 | Int64(clampWeight(w))) + (freq?.boost(text) ?? 0)
             out = insertCandidate(out, Candidate(text, p.count, score), limit)
         }
         emit(-1, AltText(text: "", weight: 0))
-        for k in ends.indices {
-            for alt in alts[k].dropFirst() {
-                emit(k, alt)
+        // 只为最后一段出同音备选：前面的段换字会一口气刷出整屏同义副本，
+        // 把「这个」「输入法」这些真正可选的短词挤到后面。末尾段是用户
+        // 正在敲的那一截，换字最可能是想要的，也最不影响已稳定的前文。
+        if let last = ends.indices.last {
+            for alt in alts[last].dropFirst() {
+                emit(last, alt)
             }
         }
         return out

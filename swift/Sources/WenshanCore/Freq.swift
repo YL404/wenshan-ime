@@ -77,6 +77,15 @@ public final class Freq {
             let key = context + "\t" + text
             pairs[key, default: 0] += 1
         }
+        // 一次上屏可能是一个整句或组句拼出来的长词，把内部的相邻字也记成
+        // 单字接续，组句时逐段就能用上，不必等这个词再被单独选一次。
+        let chars = Array(text)
+        if chars.count > 1 {
+            for i in 1..<chars.count {
+                let key = String(chars[i - 1]) + "\t" + String(chars[i])
+                pairs[key, default: 0] += 1
+            }
+        }
         if let last = text.last { context = String(last) }
         dirty += 1
     }
@@ -120,6 +129,17 @@ public final class Freq {
     /// 直接用词表里的字节查表，省掉调用方先拼字符串。
     func boost(_ raw: UnsafeRawBufferPointer, _ off: Int, _ len: Int) -> Int64 {
         boost(String(decoding: raw[off..<(off + len)], as: UTF8.self))
+    }
+
+    /// 组句里一段接在上一段（或上文）末字后面时，折算成 log 权重的加成。
+    /// 没学过就是 0，冷启动完全靠词频。
+    func segmentBoost(_ previousLast: String?, _ text: String) -> Double {
+        guard let previousLast, !previousLast.isEmpty,
+              let first = text.first, first.unicodeScalars.count == 1
+        else { return 0 }
+        let key = previousLast + "\t" + String(first)
+        let n = min(pairs[key] ?? 0, maxPairCount)
+        return n == 0 ? 0 : composePairBoost * log(Double(n) + 1) / log(Double(maxPairCount) + 1)
     }
 
     func pairBoost(_ text: String) -> Int64 {
