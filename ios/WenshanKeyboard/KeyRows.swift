@@ -16,6 +16,8 @@ enum KeyAction: Equatable {
     /// 长按回车：非默认回车键（发送/搜索等）时插入换行。
     case newline
     case backspace
+    /// 删除键长按连发：拼音缓冲一次退一个完整音节。
+    case backspaceSyllable
     /// 删除键左滑，一次删多个。
     case deleteBackward(Int)
     /// 空格键拖动，正数向右。
@@ -207,7 +209,11 @@ struct KeyRowsBuilder {
     private var numberFont: UIFont { .systemFont(ofSize: metrics.keyFontSize + 1) }
 
     private func makeLetterKey(_ character: Character) -> KeyButton {
-        makeKey(title: String(character), identifier: "key_\(character)", action: .type(String(character)))
+        let key = makeKey(
+            title: String(character), identifier: "key_\(character)",
+            action: .type(String(character)))
+        key.keyLetter = character.asciiValue
+        return key
     }
 
     private func makeNumberKey(_ digit: String) -> KeyButton {
@@ -250,7 +256,7 @@ struct KeyRowsBuilder {
         delete.queuesEvent = false
         delete.triggersOnPress = true
         delete.onRepeat = {
-            host?.perform(.backspace)
+            host?.perform(.backspaceSyllable)
         }
         delete.onDrag = { delta in
             guard delta < 0 else { return }

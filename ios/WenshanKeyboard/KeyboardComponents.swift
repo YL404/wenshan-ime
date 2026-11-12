@@ -1,4 +1,5 @@
 import UIKit
+import WenshanCore
 
 /// 键盘尺寸。iPhone 保持紧凑两档；iPad 按屏幕高度分档，浮动/分屏单独一档。
 struct KeyboardMetrics: Equatable {
@@ -69,18 +70,37 @@ struct KeyboardMetrics: Equatable {
     }
 }
 
-/// 键盘底色交给 UIInputView 的系统材质，按键只补灰阶层级：
-/// 字母键比底色亮，功能键介于两者之间，深色模式不会出现灰底垫黑键。
+/// 原生皮肤：不再自己画键盘底色，让 UIInputView 的系统键盘底板透出来。
+/// 字母键和功能键同色、无底边阴影；按下时略压暗，选中态用强调色。
+/// 系统键盘在浅色下是白键、深色下是深灰键，这里用动态色跟随。
+@MainActor
 enum KeyboardPalette {
+    static var traits = UITraitCollection.current
+
     static let key = UIColor { traits in
-        traits.userInterfaceStyle == .dark ? .systemGray3 : .systemBackground
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.28, alpha: 1)
+            : .white
     }
     static let functionKey = UIColor { traits in
-        traits.userInterfaceStyle == .dark ? .systemGray4 : .secondarySystemBackground
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.28, alpha: 1)
+            : .white
     }
     static let pressed = UIColor { traits in
-        traits.userInterfaceStyle == .dark ? .systemGray2 : .systemGray4
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.42, alpha: 1)
+            : UIColor(white: 0.86, alpha: 1)
     }
+
+    /// 面板底色：盖住键区时用不透明的系统底色，避免键影透出来。
+    static let panel = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.16, alpha: 1)
+            : UIColor(white: 0.94, alpha: 1)
+    }
+
+    static var accent: UIColor { KeyboardSettings.accentColor(traits: traits) }
 }
 
 /// 按按下顺序执行按键动作。两指快速连打时，后按下的键可能先抬起；
@@ -180,6 +200,12 @@ final class KeyButton: UIButton {
     var onCancelled: (() -> Void)?
 
     private let normalBackground: UIColor
+    /// 字母键的键帽字符，触点纠错注册几何和记录落点时用。
+    var keyLetter: UInt8?
+    /// 按下时在键区坐标系里的真实落点，由宿主在 onPressChanged 里写入。
+    var touchPoint: KeyPoint?
+    /// 把按下点转到键区坐标的宿主视图，VC 在 onPressChanged 里设置。
+    weak var keyArea: UIView?
     private var active = false
     private var touchActive = false
     private var didLongPress = false
@@ -201,8 +227,10 @@ final class KeyButton: UIButton {
         titleLabel?.adjustsFontSizeToFitWidth = true
         titleLabel?.minimumScaleFactor = 0.6
         backgroundColor = background
-        layer.cornerRadius = 7
+        layer.cornerRadius = 6
         layer.cornerCurve = .continuous
+        layer.shadowColor = nil
+        layer.shadowOpacity = 0
         accessibilityIdentifier = identifier
         accessibilityLabel = title
         translatesAutoresizingMaskIntoConstraints = false
@@ -264,6 +292,10 @@ final class KeyButton: UIButton {
         let location = touch.location(in: self)
         dragStartX = location.x
         dragStartY = location.y
+        if keyLetter != nil, let area = keyArea {
+            let point = touch.location(in: area)
+            touchPoint = KeyPoint(x: point.x, y: point.y)
+        }
         lastDragStep = 0
         onPressChanged?(true)
         if triggersOnPress {
@@ -319,7 +351,9 @@ final class KeyButton: UIButton {
     }
 
     private func updateBackground() {
-        backgroundColor = isHighlighted ? KeyboardPalette.pressed : (active ? .systemBlue : normalBackground)
+        backgroundColor = isHighlighted
+            ? KeyboardPalette.pressed
+            : (active ? KeyboardPalette.accent : normalBackground)
     }
 
     private func startTimers() {
@@ -401,7 +435,7 @@ final class KeyPreviewView: UIView {
         super.init(frame: frame)
         isHidden = true
         isUserInteractionEnabled = false
-        backgroundColor = .secondarySystemBackground
+        backgroundColor = KeyboardPalette.key
         layer.cornerRadius = 8
         layer.cornerCurve = .continuous
         layer.shadowColor = UIColor.black.cgColor

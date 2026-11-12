@@ -65,7 +65,7 @@ final class SymbolPanelView: UIView {
 
         translatesAutoresizingMaskIntoConstraints = false
         accessibilityIdentifier = "symbol_panel"
-        backgroundColor = KeyboardPalette.functionKey
+        backgroundColor = KeyboardPalette.panel
 
         header.axis = .horizontal
         header.spacing = 4

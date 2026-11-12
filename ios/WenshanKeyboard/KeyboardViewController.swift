@@ -1,5 +1,6 @@
 import UIKit
 import os
+import WenshanCore
 
 private let keyboardLog = Logger(subsystem: "im.wenshan.ios.keyboard", category: "lifecycle")
 
@@ -26,6 +27,8 @@ final class KeyboardViewController: UIInputViewController {
     private let keyEvents = KeyEventQueue()
     private let keyFeedback = UIImpactFeedbackGenerator(style: .light)
     private let selectionFeedback = UISelectionFeedbackGenerator()
+    private var keyFeedbackStyle: UIImpactFeedbackGenerator.FeedbackStyle = .light
+    private let diagnostic = KeyboardDiagnostic()
     private var heightConstraint: NSLayoutConstraint!
     private var topBarHeightConstraint: NSLayoutConstraint!
     private var metrics = KeyboardMetrics.make(screen: .zero, width: 0, isPad: false, isFloating: false)
@@ -34,20 +37,34 @@ final class KeyboardViewController: UIInputViewController {
     private weak var previewedButton: KeyButton?
     private var layer: KeyboardLayer = .letters
     private var overlay: Overlay = .none
+    private var candidatePanelItems: [String] = []
+
+    override func loadView() {
+        // 原生皮肤：键盘底板交给 UIInputView 的系统材质，不再画自己的背景。
+        let inputView = UIInputView(frame: .zero, inputViewStyle: .keyboard)
+        inputView.allowsSelfSizing = false
+        view = inputView
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         keyboardLog.info("viewDidLoad")
+        KeyboardPalette.traits = traitCollection
         // 规则层判断中英文之间要不要补空格，读的是宿主正文里光标前的字符。
         model.contextBefore = { [weak self] in self?.writer.contextBefore ?? "" }
+        model.contextAfter = { [weak self] in self?.writer.contextAfter ?? "" }
         buildUI()
         loadEngine()
+        diagnostic.log("keyboard_loaded", memory: true)
         render()
+        diagnostic.log("keyboard_built", memory: true)
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         updateContext()
+        KeyboardPalette.traits = traitCollection
+        applySettings()
         keyFeedback.prepare()
         selectionFeedback.prepare()
         if model.phase != .ready {
@@ -58,7 +75,10 @@ final class KeyboardViewController: UIInputViewController {
         setOverlay(.none)
         layer = .letters
         renderKeyboardRows()
+        registerKeyGeometry()
         render()
+        diagnostic.log("keyboard_shown", memory: true)
+        diagnostic.log("focus_in", memory: true)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -71,6 +91,26 @@ final class KeyboardViewController: UIInputViewController {
         keyEvents.reset()
         setOverlay(.none)
         candidateBar.setCandidates([])
+        diagnostic.log("keyboard_hidden", memory: true)
+    }
+
+    override func willTransition(
+        to newCollection: UITraitCollection,
+        with coordinator: UIViewControllerTransitionCoordinator
+    ) {
+        super.willTransition(to: newCollection, with: coordinator)
+        KeyboardPalette.traits = newCollection
+        candidateBar.setCandidateFont(currentCandidateFont())
+        candidatePanel.setFont(currentCandidateFont())
+        updateKeys()
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.registerKeyGeometry()
+        }
+    }
+
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        diagnostic.log("memory_warning", memory: true)
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
@@ -103,12 +143,14 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateMetrics()
+        registerKeyGeometry()
     }
 
     /// 宿主改了正文或光标（点到别处、粘贴、App 自己改内容）：只在组合态重置，
     /// render 会顺带清掉 marked text。
     private func handleExternalChange() {
         dismissOverlay(.symbols)
+        model.editorDidChange()
         guard model.isComposing else { return }
         model.reset()
         render()
@@ -143,7 +185,8 @@ final class KeyboardViewController: UIInputViewController {
         ])
         candidateBar.isHidden = true
 
-        candidateBar.setCandidateFont(.systemFont(ofSize: metrics.candidateFontSize))
+        candidateBar.setCandidateFont(currentCandidateFont())
+        candidatePanel.setFont(currentCandidateFont())
         candidateBar.onSelect = { [weak self] index in
             guard let self else { return }
             self.pick(self.model.select(index))
@@ -159,6 +202,9 @@ final class KeyboardViewController: UIInputViewController {
             self?.setOverlay(.none)
             self?.dismissKeyboard()
         }
+        candidateBar.onManage = { [weak self] index, pin in
+            self?.manageCandidate(index, pin: pin)
+        }
         toolbarBar.onToggleFullWidth = { [weak self] in
             guard let self else { return }
             self.apply(self.model.toggleFullWidth())
@@ -173,6 +219,9 @@ final class KeyboardViewController: UIInputViewController {
         candidatePanel.onSelect = { [weak self] index in
             guard let self else { return }
             self.pick(self.model.selectGlobal(index))
+        }
+        candidatePanel.menuProvider = { [weak self] index in
+            self?.candidateMenu(for: index)
         }
 
         symbolPanel.isHidden = true
@@ -196,6 +245,9 @@ final class KeyboardViewController: UIInputViewController {
         root.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(topBar)
         root.addArrangedSubview(keyboardStack)
+        view.backgroundColor = .clear
+        topBar.backgroundColor = .clear
+        keyboardStack.backgroundColor = .clear
         view.addSubview(root)
         view.addSubview(candidatePanel)
         view.addSubview(symbolPanel)
@@ -243,9 +295,18 @@ final class KeyboardViewController: UIInputViewController {
         topBarHeightConstraint.constant = next.candidateHeight
         root.spacing = next.gap
         keyboardStack.spacing = next.gap
-        candidateBar.setCandidateFont(.systemFont(ofSize: next.candidateFontSize))
+        candidateBar.setCandidateFont(currentCandidateFont())
+        candidatePanel.setFont(currentCandidateFont())
         renderKeyboardRows()
         view.setNeedsLayout()
+    }
+
+    /// 候选字号按 Dynamic Type 缩放，键帽字号固定（键帽触摸目标不随字号变）。
+    private func currentCandidateFont() -> UIFont {
+        let size = KeyboardSettings.candidateFontSize(
+            base: metrics.candidateFontSize, traits: traitCollection,
+            isPad: traitCollection.userInterfaceIdiom == .pad)
+        return .systemFont(ofSize: size)
     }
 
     /// 按当前页重建键区。只在切页/换方向时调用，不在每次按键时调用。
@@ -259,6 +320,26 @@ final class KeyboardViewController: UIInputViewController {
             host: self
         ).build(layer)
         keys.rows.forEach(keyboardStack.addArrangedSubview)
+        for row in keys.rows {
+            for button in row.subviews.compactMap({ $0 as? KeyButton }) {
+                button.keyArea = keyboardStack
+            }
+        }
+    }
+
+    /// 把 26 个字母键的矩形注册给规则层，触点纠错按真实落点加权。
+    private func registerKeyGeometry() {
+        guard keyboardStack.bounds.width > 0 else { return }
+        var frames: [KeyFrame?] = Array(repeating: nil, count: 26)
+        for row in keys.rows {
+            for case let button as KeyButton in row.subviews {
+                guard let letter = button.keyLetter else { continue }
+                let rect = button.convert(button.bounds, to: keyboardStack)
+                frames[Int(letter - UInt8(ascii: "a"))] = KeyFrame(
+                    x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
+            }
+        }
+        model.setKeyFrames(frames)
     }
 
     private func showLayer(_ next: KeyboardLayer) {
@@ -313,8 +394,47 @@ final class KeyboardViewController: UIInputViewController {
             dismissOverlay(.symbols)
             return
         }
+        candidatePanelItems = all
         candidatePanel.setCandidates(all)
         setOverlay(.candidates)
+    }
+
+    /// 候选长按菜单：取首/尾字，以及置顶或删除词条。
+    private func candidateMenu(for index: Int) -> UIMenu? {
+        guard index < candidatePanelItems.count else { return nil }
+        let text = candidatePanelItems[index]
+        var actions: [UIMenuElement] = []
+        if text.count > 1 {
+            actions.append(UIAction(title: "取首字") { [weak self] _ in
+                self?.pick(self?.model.selectChar(index, last: false) ?? .idle)
+            })
+            actions.append(UIAction(title: "取尾字") { [weak self] _ in
+                self?.pick(self?.model.selectChar(index, last: true) ?? .idle)
+            })
+        }
+        actions.append(UIAction(title: "置顶此候选") { [weak self] _ in
+            self?.manageCandidate(index, pin: true)
+        })
+        actions.append(UIAction(title: "删除此候选", attributes: .destructive) { [weak self] _ in
+            self?.manageCandidate(index, pin: false)
+        })
+        return UIMenu(children: actions)
+    }
+
+    /// 候选条用当前页索引，展开面板用全量索引，两者都交给规则层管理。
+    private func manageCandidate(_ index: Int, pin: Bool) {
+        let text = overlay == .candidates
+            ? (candidatePanelItems.indices.contains(index) ? candidatePanelItems[index] : nil)
+            : (model.candidates.indices.contains(index) ? model.candidates[index] : nil)
+        guard let text else { return }
+        model.manage(text, pin: pin)
+        playSelectionFeedback()
+        if overlay == .candidates {
+            let all = model.allCandidates()
+            candidatePanelItems = all
+            candidatePanel.setCandidates(all)
+        }
+        render()
     }
 
     /// 从候选条、全部候选或符号面板选中一项：关面板、触感、上屏。
@@ -328,8 +448,16 @@ final class KeyboardViewController: UIInputViewController {
 
     private func playKeyFeedback() {
         guard hasFullAccess else { return }
-        keyFeedback.impactOccurred(intensity: 0.7)
-        keyFeedback.prepare()
+        let (style, intensity) = KeyboardSettings.hapticStyle()
+        let generator = style == keyFeedbackStyle
+            ? keyFeedback
+            : UIImpactFeedbackGenerator(style: style)
+        if let intensity {
+            generator.impactOccurred(intensity: intensity)
+        } else {
+            generator.impactOccurred()
+        }
+        generator.prepare()
     }
 
     private func playSelectionFeedback() {
@@ -363,9 +491,25 @@ final class KeyboardViewController: UIInputViewController {
         let directory = AppGroup.keyboardDataDirectory()
         keyboardLog.info("loadEngine data=\(directory.path, privacy: .public)")
         model.load(dataDirectory: directory)
+        applySettings()
         if case .failed(let reason) = model.phase {
             keyboardLog.error("engine failed: \(reason, privacy: .public)")
         }
+    }
+
+    /// 每次键盘出现把共享偏好应用到规则层和 UI，不重建引擎会话。
+    private func applySettings() {
+        let startup = KeyboardSettings.startupMode
+        model.setMode(startup)
+        model.setCandidatePageSize(KeyboardSettings.candidatePageSize)
+        model.setSpaceRevertsPunctuation(KeyboardSettings.spaceRevertsPunctuation)
+        model.setSmartPunctuation(true)
+        keyFeedbackStyle = KeyboardSettings.hapticStyle().0
+        diagnostic.isEnabled = KeyboardSettings.diagnosticLog
+        candidateBar.setCandidateFont(currentCandidateFont())
+        candidatePanel.setFont(currentCandidateFont())
+        updateKeys()
+        diagnostic.log("preferences_applied", memory: true)
     }
 
     private func updateContext() {
@@ -414,8 +558,10 @@ final class KeyboardViewController: UIInputViewController {
 
     private func apply(_ outcome: KeyboardOutcome, renderNow: Bool = true) {
         switch outcome {
-        case .commit(let text):
+        case .commit(let text, let deleteBefore, let caretOffset):
+            if deleteBefore > 0 { writer.deleteBackward(times: deleteBefore) }
             writer.insert(text)
+            if caretOffset != 0 { writer.moveCursor(by: caretOffset) }
         case .deleteBackward:
             writer.deleteBackward()
         case .handled, .idle:
@@ -450,6 +596,8 @@ extension KeyboardViewController: KeyRowsHost {
             apply(.commit("\n"))
         case .backspace:
             apply(model.backspace())
+        case .backspaceSyllable:
+            apply(model.backspaceSyllable())
         case .deleteBackward(let times):
             delete(times: times)
         case .moveCursor(let steps):
@@ -462,7 +610,11 @@ extension KeyboardViewController: KeyRowsHost {
             model.shiftTapped()
             render()
         case .toggleMode:
-            apply(model.toggleMode())
+            let outcome = model.toggleMode()
+            if KeyboardSettings.rememberMode {
+                KeyboardSettings.lastMode = model.mode == .chinese ? "chinese" : "english"
+            }
+            apply(outcome)
         case .showNumbers:
             showLayer(.numbers)
         case .showLetters:
@@ -491,6 +643,9 @@ extension KeyboardViewController: KeyRowsHost {
 
     func keyPressChanged(_ key: KeyButton, pressed: Bool) {
         if pressed {
+            if let letter = key.keyLetter, let point = key.touchPoint {
+                model.setTouchPoint(letter, point)
+            }
             playKeyFeedback()
             showPreview(for: key)
         } else {

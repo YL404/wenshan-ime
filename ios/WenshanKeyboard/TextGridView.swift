@@ -11,6 +11,8 @@ final class TextGridView: UIView {
         var accessibilityIdentifier: String
         var accessibilityValue: String?
         var accessibilityHint: String?
+        /// 首选候选用强调色字、不填底。
+        var isFirst: Bool = false
     }
 
     var onSelect: ((Int) -> Void)?
@@ -86,6 +88,9 @@ final class TextGridView: UIView {
         }
     }
 
+    /// 供宿主在只改样式后重画当前内容，不重置滚动位置。
+    func itemsSnapshot() -> [String] { items }
+
     private func cellWidth() -> CGFloat {
         let width = max(0, collectionView.bounds.width - 2 * Self.padding)
         guard width > 0 else { return Self.cellHeight }
@@ -160,8 +165,8 @@ final class GridCell: PressableCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        contentView.backgroundColor = KeyboardPalette.key
-        contentView.layer.cornerRadius = 8
+        contentView.backgroundColor = .clear
+        contentView.layer.cornerRadius = 0
         contentView.layer.cornerCurve = .continuous
         contentView.clipsToBounds = true
 
@@ -187,6 +192,7 @@ final class GridCell: PressableCell {
     func configure(text: String, style: TextGridView.Style) {
         label.text = text
         label.font = style.font
+        label.textColor = style.isFirst ? KeyboardPalette.accent : .label
         leading.constant = style.inset
         trailing.constant = -style.inset
         accessibilityIdentifier = style.accessibilityIdentifier

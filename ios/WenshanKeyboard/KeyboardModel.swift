@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import WenshanCore
 
 /// 一次按键或手势后交给 VC 的渲染指令。
 enum KeyboardOutcome {
@@ -7,8 +8,8 @@ enum KeyboardOutcome {
     case idle
     /// 常规按键处理完：VC 按当前组合状态刷新 marked text 和候选条。
     case handled
-    /// 处理完并需要往正文插入文本。
-    case commit(String)
+    /// 处理完并需要往正文插入文本：先删 deleteBefore 个字符，插入后移光标。
+    case commit(String, deleteBefore: Int = 0, caretOffset: Int = 0)
     /// 组合缓冲为空，删除正文一个字符。
     case deleteBackward
 }
@@ -51,6 +52,12 @@ final class KeyboardModel {
     var contextBefore: () -> String {
         get { bridge.contextBefore }
         set { bridge.contextBefore = newValue }
+    }
+
+    /// 光标后的正文，成对标点跨过时读它。
+    var contextAfter: () -> String {
+        get { bridge.contextAfter }
+        set { bridge.contextAfter = newValue }
     }
 
     var isComposing: Bool { !preedit.isEmpty }
@@ -102,6 +109,18 @@ final class KeyboardModel {
     func updateContext(returnKeyType: UIReturnKeyType) {
         self.returnKeyType = returnKeyType
     }
+
+    /// 键盘出现时把本机偏好应用到规则层，不重建会话。
+    func setMode(_ name: String) { bridge.setMode(name == "english" ? .english : .chinese) }
+    func setCandidatePageSize(_ size: Int) { bridge.setCandidatePageSize(size) }
+    func setSpaceRevertsPunctuation(_ enabled: Bool) { bridge.setSpaceRevertsPunctuation(enabled) }
+    func setSmartPunctuation(_ enabled: Bool) {
+        bridge.configure(smart: enabled, pair: enabled)
+    }
+    func setKeyFrames(_ frames: [KeyFrame?]) { bridge.setKeyFrames(frames) }
+    func setTouchPoint(_ letter: UInt8, _ point: KeyPoint) { bridge.setTouchPoint(letter, point) }
+    func editorDidChange() { bridge.editorDidChange() }
+    func manage(_ text: String, pin: Bool) { bridge.manage(text, pin: pin) }
 
     /// 字母键。中文态 Shift 追加到组合缓冲、按大小写出英文候选；英文态直接插入。
     func type(_ key: String) -> KeyboardOutcome {
@@ -185,6 +204,13 @@ final class KeyboardModel {
         return outcome.consumed ? apply(outcome) : .deleteBackward
     }
 
+    /// 长按删除：一次退一个完整音节，缓冲空了交给平台删正文。
+    func backspaceSyllable() -> KeyboardOutcome {
+        guard phase == .ready else { return .deleteBackward }
+        let outcome = bridge.backspaceSyllable()
+        return outcome.consumed ? apply(outcome) : .deleteBackward
+    }
+
     /// 选中当前页第 i 个候选并上屏。
     func select(_ index: Int) -> KeyboardOutcome {
         guard phase == .ready else { return .idle }
@@ -249,6 +275,11 @@ final class KeyboardModel {
         candidates = outcome.candidates
         mode = outcome.isEnglish ? .english : .chinese
         fullWidth = outcome.fullWidth
-        return outcome.text.isEmpty ? .handled : .commit(outcome.text)
+        return outcome.text.isEmpty && outcome.deleteBefore == 0 && outcome.caretOffset == 0
+            ? .handled
+            : .commit(
+                outcome.text,
+                deleteBefore: outcome.deleteBefore,
+                caretOffset: outcome.caretOffset)
     }
 }

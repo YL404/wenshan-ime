@@ -110,6 +110,7 @@ final class ToolbarBar: UIView {
 final class CandidateBar: UIView {
     var onSelect: ((Int) -> Void)?
     var onSelectChar: ((Int, Bool) -> Void)?
+    var onManage: ((Int, Bool) -> Void)?
     var onExpand: (() -> Void)?
     var onDismiss: (() -> Void)?
 
@@ -273,15 +274,23 @@ extension CandidateBar: UICollectionViewDataSource, UICollectionViewDelegateFlow
         contextMenuConfigurationForItemAt indexPath: IndexPath,
         point: CGPoint
     ) -> UIContextMenuConfiguration? {
-        guard candidates.indices.contains(indexPath.item),
-              candidates[indexPath.item].count > 1,
-              let onSelectChar else { return nil }
+        guard candidates.indices.contains(indexPath.item) else { return nil }
         let index = indexPath.item
+        let canPickChar = candidates[index].count > 1 && onSelectChar != nil
+        guard canPickChar || onManage != nil else { return nil }
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
-            UIMenu(children: [
-                UIAction(title: "取首字") { _ in onSelectChar(index, false) },
-                UIAction(title: "取尾字") { _ in onSelectChar(index, true) },
-            ])
+            var actions: [UIMenuElement] = []
+            if canPickChar {
+                actions.append(UIAction(title: "取首字") { _ in self.onSelectChar?(index, false) })
+                actions.append(UIAction(title: "取尾字") { _ in self.onSelectChar?(index, true) })
+            }
+            if let onManage = self.onManage {
+                actions.append(UIAction(title: "置顶此候选") { _ in onManage(index, true) })
+                actions.append(UIAction(title: "删除此候选", attributes: .destructive) { _ in
+                    onManage(index, false)
+                })
+            }
+            return UIMenu(children: actions)
         }
     }
 }
@@ -317,8 +326,9 @@ final class CandidateCell: PressableCell {
     func configure(text: String, index: Int, font: UIFont, isFirst: Bool) {
         label.text = text
         label.font = isFirst ? .systemFont(ofSize: font.pointSize, weight: .semibold) : font
-        contentView.backgroundColor = isFirst ? KeyboardPalette.key : .clear
-        contentView.layer.cornerRadius = isFirst ? 9 : 0
+        label.textColor = isFirst ? KeyboardPalette.accent : .label
+        contentView.backgroundColor = .clear
+        contentView.layer.cornerRadius = 0
         accessibilityIdentifier = "candidate_\(index)"
         accessibilityLabel = text
         accessibilityValue = isFirst ? "首选" : nil
@@ -333,6 +343,10 @@ final class CandidatePanel: UIView {
         get { grid.onSelect }
         set { grid.onSelect = newValue }
     }
+    var menuProvider: ((Int) -> UIMenu?)? {
+        get { grid.menuProvider }
+        set { grid.menuProvider = newValue }
+    }
 
     private let grid = TextGridView(minColumns: 3, gridIdentifier: "candidate_panel_grid")
 
@@ -340,14 +354,15 @@ final class CandidatePanel: UIView {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         accessibilityIdentifier = "candidate_panel"
-        backgroundColor = KeyboardPalette.functionKey
+        backgroundColor = KeyboardPalette.panel
 
         grid.style = { index, _ in
             TextGridView.Style(
                 font: .systemFont(ofSize: 17, weight: index == 0 ? .semibold : .regular),
                 inset: 6,
                 accessibilityIdentifier: "candidate_panel_\(index)",
-                accessibilityValue: index == 0 ? "首选" : nil)
+                accessibilityValue: index == 0 ? "首选" : nil,
+                isFirst: index == 0)
         }
         addSubview(grid)
         NSLayoutConstraint.activate([
@@ -364,5 +379,17 @@ final class CandidatePanel: UIView {
 
     func setCandidates(_ candidates: [String]) {
         grid.setItems(candidates)
+    }
+
+    func setFont(_ font: UIFont) {
+        grid.style = { index, _ in
+            TextGridView.Style(
+                font: .systemFont(ofSize: font.pointSize, weight: index == 0 ? .semibold : .regular),
+                inset: 6,
+                accessibilityIdentifier: "candidate_panel_\(index)",
+                accessibilityValue: index == 0 ? "首选" : nil,
+                isFirst: index == 0)
+        }
+        grid.setItems(grid.itemsSnapshot())
     }
 }

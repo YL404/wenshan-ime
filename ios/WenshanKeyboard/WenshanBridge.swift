@@ -16,6 +16,9 @@ struct BridgeOutcome: Equatable {
     var consumed: Bool
     var isEnglish: Bool
     var fullWidth: Bool
+    /// 插入 text 前先删掉光标前多少字符，插入后把光标移多少字符。
+    var deleteBefore: Int
+    var caretOffset: Int
 }
 
 /// WenshanCore 的门面，也是唯一持有引擎状态的地方。打开词表只是 mmap 加校验文件头，
@@ -24,19 +27,24 @@ struct BridgeOutcome: Equatable {
 final class WenshanBridge {
     /// 光标前的正文，由键盘 VC 提供。规则层判断要不要补空格时读它。
     var contextBefore: () -> String = { "" }
+    /// 光标后的正文，成对标点跨过时读第一个字符。
+    var contextAfter: () -> String = { "" }
 
     private var session: Session?
+    private var engine: Engine?
     private var lastRune: Unicode.Scalar?
+    private var lastResult: Result?
 
     private static let empty = BridgeOutcome(
         text: "", preedit: "", candidates: [], consumed: false, isEnglish: false,
-        fullWidth: true)
+        fullWidth: true, deleteBefore: 0, caretOffset: 0)
 
     /// 打开扩展 Bundle 里的词表并建立引擎。词表跟着扩展一起安装和更新，
     /// 不再复制到 App Group：副本只有打开主 App 才会刷新，更新后键盘会一直用旧词表。
     /// 失败时返回错误原因，成功返回 nil。
     func open(dataDirectory: URL) -> String? {
         session = nil
+        engine = nil
         lastRune = nil
 
         guard let url = Bundle.main.url(forResource: "dict", withExtension: "bin") else {
@@ -55,6 +63,7 @@ final class WenshanBridge {
             }
             let sess = Session(eng: eng)
             sess.setLookbehind { [weak self] in self?.lastRune }
+            sess.setLookahead { [weak self] in self?.contextAfter().unicodeScalars.first }
             if !dataDirectory.path.isEmpty {
                 eng.setFreq(
                     Freq.load(dataDirectory.appendingPathComponent("freq.tsv").path))
@@ -64,6 +73,7 @@ final class WenshanBridge {
                     UserDict.load(dataDirectory.appendingPathComponent("phrases.tsv").path))
             }
             session = sess
+            engine = eng
             return nil
         } catch {
             return String(describing: error)
@@ -111,6 +121,27 @@ final class WenshanBridge {
         call(syncContext: false) { $0.backspace() }
     }
 
+    func backspaceSyllable() -> BridgeOutcome {
+        call(syncContext: false) { $0.backspaceSyllable() }
+    }
+
+    /// 键盘出现时应用本机偏好。这些开关不重建引擎会话。
+    func setMode(_ mode: Mode) { session?.setMode(mode) }
+    func setCandidatePageSize(_ size: Int) { engine?.pageSize = size }
+    func setSpaceRevertsPunctuation(_ enabled: Bool) {
+        session?.spaceRevertsPunctuation = enabled
+    }
+    func configure(smart: Bool, pair: Bool) {
+        session?.smartPunctuation = smart
+        session?.pairPunctuation = pair
+    }
+    func setKeyFrames(_ frames: [KeyFrame?]) { engine?.setKeyFrames(frames) }
+    func setTouchPoint(_ letter: UInt8, _ point: KeyPoint) {
+        engine?.setTouchPoint(letter, point)
+    }
+    func editorDidChange() { session?.editorDidChange() }
+    func manage(_ text: String, pin: Bool) { _ = engine?.manage(text, pin: pin) }
+
     func select(_ index: Int) -> BridgeOutcome {
         call { $0.select(index) }
     }
@@ -155,9 +186,10 @@ final class WenshanBridge {
         }
         guard let session else { return Self.empty }
         let result = action(session)
+        lastResult = result
         // 和原来一样，词频攒够 50 次才写盘；失败不影响这次按键。
         _ = try? session.save(force: false)
-        return snapshot(result.text, result.consumed)
+        return snapshot(result)
     }
 
     /// 更新光标前的正文。组合中正文末尾挂着预编辑串本身，要先去掉：
@@ -172,14 +204,17 @@ final class WenshanBridge {
         lastRune = trimmed.unicodeScalars.last
     }
 
-    private func snapshot(_ text: String = "", _ consumed: Bool = false) -> BridgeOutcome {
+    private func snapshot(_ result: Result? = nil) -> BridgeOutcome {
         guard let session else { return Self.empty }
+        let info = result ?? lastResult
         return BridgeOutcome(
-            text: text,
+            text: info?.text ?? "",
             preedit: session.preedit,
             candidates: session.candidates.map(\.text),
-            consumed: consumed,
+            consumed: info?.consumed ?? false,
             isEnglish: session.currentMode == .english,
-            fullWidth: session.isFullWidth)
+            fullWidth: session.isFullWidth,
+            deleteBefore: result?.deleteBefore ?? 0,
+            caretOffset: result?.caretOffset ?? 0)
     }
 }

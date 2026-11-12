@@ -19,6 +19,11 @@ final class DocumentWriter {
         proxy().documentContextBeforeInput ?? ""
     }
 
+    /// 光标后的正文。成对标点跨过时要读它，宿主不报告时返回空串。
+    var contextAfter: String {
+        proxy().documentContextAfterInput ?? ""
+    }
+
     /// 把预编辑串写成 marked text，光标停在末尾；空串时清掉。
     func setMarkedText(_ text: String) {
         guard !text.isEmpty else {
@@ -50,6 +55,14 @@ final class DocumentWriter {
 
     func deleteBackward() {
         write { $0.deleteBackward() }
+    }
+
+    /// 智能标点改写：一次删掉刚上屏的 n 个字符。
+    func deleteBackward(times: Int) {
+        guard times > 0 else { return }
+        write { proxy in
+            for _ in 0..<times { proxy.deleteBackward() }
+        }
     }
 
     func moveCursor(by steps: Int) {
