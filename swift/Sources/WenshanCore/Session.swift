@@ -104,8 +104,9 @@ public final class Session {
         return result("", true)
     }
 
-    /// 中文态 Shift+字母：不再直接上屏，一律进入组合缓冲作为英文段的起点。
-    /// 后续字母保留大小写，英文词表按小写编码查询，显示时按段首大小写推导。
+    /// 中文态 Shift+字母：不再直接上屏，一律追加到组合缓冲。
+    /// 小写前缀后接大写（iPhone、GitHub）也靠这条路径保留，后续字母不再
+    /// 被归一成小写；英文词表按小写编码查询，显示时按段首大小写推导。
     @discardableResult
     public func shiftLetter(_ ch: UInt8) -> Result {
         var c = ch
@@ -114,10 +115,6 @@ public final class Session {
         }
         if mode != .chinese {
             return direct(String(decoding: [c], as: UTF8.self))
-        }
-        if !buffer.isEmpty {
-            // 已有拼音缓冲时另起一段英文，不再把拼音编码接到英文词里。
-            eng?.reset()
         }
         guard let eng, eng.type(c) else { return result("", false) }
         englishRun = true

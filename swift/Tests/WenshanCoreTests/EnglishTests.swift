@@ -107,4 +107,30 @@ final class EnglishCandidateTests: XCTestCase {
         typeEnglish(e, "n")
         XCTAssertFalse(e.candidates.contains { $0.text == "Ni" })
     }
+
+    /// 词中间大写：小写前缀后接 Shift+字母，已打的字母不能被吞掉。
+    /// 回归 iPhone = i + Shift+P + hone。
+    func testShiftLetterKeepsLowercasePrefix() {
+        let e = engine([], [
+            EnglishEntry(code: "iphone", display: "iPhone", weight: 999),
+        ])
+        let s = Session(eng: e)
+        _ = s.type(UInt8(ascii: "i"))
+        _ = s.shiftLetter(UInt8(ascii: "P"))
+        for b in "hone".utf8 { _ = s.type(b) }
+        XCTAssertEqual(s.preedit, "iPhone")
+        XCTAssertEqual(s.candidates.first?.text, "iPhone")
+        XCTAssertEqual(s.select(0).text, "iPhone")
+    }
+
+    /// 拼音缓冲里按 Shift 也不清空前缀：统一作为英文串继续，词表不认识时
+    /// 给原文兜底，回车仍能原样上屏。
+    func testShiftLetterAppendsToPinyinBuffer() {
+        let e = engine([], [])
+        let s = Session(eng: e)
+        typeKeys(s, "ni")
+        _ = s.shiftLetter(UInt8(ascii: "A"))
+        XCTAssertEqual(s.preedit, "niA")
+        XCTAssertTrue(s.candidates.contains { $0.text == "niA" })
+    }
 }
