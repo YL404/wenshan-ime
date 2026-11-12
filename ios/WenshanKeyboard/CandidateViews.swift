@@ -1,16 +1,47 @@
 import UIKit
 
+/// 顶栏按钮统一成键帽：圆角浅底、按下压暗、足够大的点击区。
+/// 避免它们看起来像一行 footer 文字。
+@MainActor
+private func configureToolbarButton(
+    _ button: UIButton, image: UIImage?, title: String?, action: @escaping () -> Void
+) {
+    var config = UIButton.Configuration.plain()
+    config.image = image
+    config.title = title
+    config.baseForegroundColor = .label
+    config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+    config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+        var out = incoming
+        out.font = .systemFont(ofSize: 16, weight: .medium)
+        return out
+    }
+    config.imagePadding = 0
+    button.configuration = config
+    button.configurationUpdateHandler = { button in
+        button.backgroundColor = button.isHighlighted
+            ? KeyboardPalette.pressed
+            : KeyboardPalette.key
+    }
+    button.backgroundColor = KeyboardPalette.key
+    button.layer.cornerRadius = 7
+    button.layer.cornerCurve = .continuous
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.addAction(UIAction { _ in action() }, for: .touchUpInside)
+}
+
+@MainActor
+private func toolbarIcon(_ name: String, pointSize: CGFloat = 16) -> UIImage? {
+    UIImage(
+        systemName: name,
+        withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium))
+}
+
 /// 顶栏右端的「收起键盘」按钮，空闲工具栏和候选条各一个。
 @MainActor
 private func configureDismissButton(_ button: UIButton, action: @escaping () -> Void) {
-    let image = UIImage(
-        systemName: "chevron.down",
-        withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-    button.setImage(image, for: .normal)
-    button.tintColor = .secondaryLabel
+    configureToolbarButton(button, image: toolbarIcon("chevron.down"), title: nil, action: action)
     button.accessibilityLabel = "收起键盘"
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.addAction(UIAction { _ in action() }, for: .touchUpInside)
 }
 
 /// 空闲时占住顶栏：左侧品牌和状态，右侧全半角与收起。
@@ -45,14 +76,10 @@ final class ToolbarBar: UIView {
         statusLabel.accessibilityIdentifier = "toolbar_status"
         statusLabel.isHidden = true
 
-        fullWidthButton.setTitle("全", for: .normal)
-        fullWidthButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
-        fullWidthButton.setTitleColor(.secondaryLabel, for: .normal)
-        fullWidthButton.accessibilityIdentifier = "key_full_width"
-        fullWidthButton.translatesAutoresizingMaskIntoConstraints = false
-        fullWidthButton.addAction(UIAction { [weak self] _ in
+        configureToolbarButton(fullWidthButton, image: nil, title: "全") { [weak self] in
             self?.onToggleFullWidth?()
-        }, for: .touchUpInside)
+        }
+        fullWidthButton.accessibilityIdentifier = "key_full_width"
 
         dismissButton.accessibilityIdentifier = "toolbar_dismiss"
         configureDismissButton(dismissButton) { [weak self] in self?.onDismiss?() }
@@ -66,15 +93,15 @@ final class ToolbarBar: UIView {
             brandLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             brandLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             dismissButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            dismissButton.widthAnchor.constraint(equalToConstant: 40),
-            dismissButton.heightAnchor.constraint(equalToConstant: 40),
+            dismissButton.widthAnchor.constraint(equalToConstant: 44),
+            dismissButton.heightAnchor.constraint(equalToConstant: 36),
 
-            fullWidthButton.trailingAnchor.constraint(equalTo: dismissButton.leadingAnchor, constant: -2),
+            fullWidthButton.trailingAnchor.constraint(equalTo: dismissButton.leadingAnchor, constant: -6),
             fullWidthButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             fullWidthButton.widthAnchor.constraint(equalToConstant: 44),
-            fullWidthButton.heightAnchor.constraint(equalToConstant: 40),
+            fullWidthButton.heightAnchor.constraint(equalToConstant: 36),
 
             statusLabel.leadingAnchor.constraint(equalTo: brandLabel.trailingAnchor, constant: 10),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: fullWidthButton.leadingAnchor, constant: -8),
@@ -94,7 +121,9 @@ final class ToolbarBar: UIView {
     }
 
     func setFullWidth(_ fullWidth: Bool) {
-        fullWidthButton.setTitle(fullWidth ? "全" : "半", for: .normal)
+        var config = fullWidthButton.configuration
+        config?.title = fullWidth ? "全" : "半"
+        fullWidthButton.configuration = config
         fullWidthButton.accessibilityLabel = fullWidth
             ? "全角标点，点击切换半角"
             : "半角标点，点击切换全角"
@@ -154,18 +183,13 @@ final class CandidateBar: UIView {
         emptyLabel.accessibilityIdentifier = "candidate_empty"
         emptyLabel.isHidden = true
 
-        expandButton.setImage(
-            UIImage(
-                systemName: "square.grid.2x2",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)),
-            for: .normal)
-        expandButton.tintColor = .secondaryLabel
+        configureToolbarButton(
+            expandButton, image: toolbarIcon("square.grid.2x2"), title: nil
+        ) { [weak self] in
+            self?.onExpand?()
+        }
         expandButton.accessibilityIdentifier = "candidate_expand"
         expandButton.accessibilityLabel = "展开全部候选"
-        expandButton.translatesAutoresizingMaskIntoConstraints = false
-        expandButton.addAction(UIAction { [weak self] _ in
-            self?.onExpand?()
-        }, for: .touchUpInside)
 
         dismissButton.accessibilityIdentifier = "key_dismiss"
         configureDismissButton(dismissButton) { [weak self] in self?.onDismiss?() }
@@ -176,18 +200,18 @@ final class CandidateBar: UIView {
         addSubview(dismissButton)
 
         NSLayoutConstraint.activate([
-            dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             dismissButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            dismissButton.widthAnchor.constraint(equalToConstant: 40),
-            dismissButton.heightAnchor.constraint(equalToConstant: 40),
+            dismissButton.widthAnchor.constraint(equalToConstant: 44),
+            dismissButton.heightAnchor.constraint(equalToConstant: 36),
 
-            expandButton.trailingAnchor.constraint(equalTo: dismissButton.leadingAnchor, constant: -2),
+            expandButton.trailingAnchor.constraint(equalTo: dismissButton.leadingAnchor, constant: -6),
             expandButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            expandButton.widthAnchor.constraint(equalToConstant: 40),
-            expandButton.heightAnchor.constraint(equalToConstant: 40),
+            expandButton.widthAnchor.constraint(equalToConstant: 44),
+            expandButton.heightAnchor.constraint(equalToConstant: 36),
 
             collectionView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: expandButton.leadingAnchor, constant: -2),
+            collectionView.trailingAnchor.constraint(equalTo: expandButton.leadingAnchor, constant: -6),
             collectionView.topAnchor.constraint(equalTo: topAnchor),
             collectionView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
@@ -226,11 +250,9 @@ final class CandidateBar: UIView {
 
     func setExpanded(_ expanded: Bool) {
         let name = expanded ? "xmark" : "square.grid.2x2"
-        expandButton.setImage(
-            UIImage(
-                systemName: name,
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)),
-            for: .normal)
+        var config = expandButton.configuration
+        config?.image = toolbarIcon(name)
+        expandButton.configuration = config
         expandButton.accessibilityLabel = expanded ? "收起全部候选" : "展开全部候选"
     }
 }
@@ -354,7 +376,8 @@ final class CandidatePanel: UIView {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         accessibilityIdentifier = "candidate_panel"
-        backgroundColor = KeyboardPalette.panel
+        // 不画自己的底板：和字母页/数字页一样露出 UIInputView 的系统键盘材质。
+        backgroundColor = .clear
 
         grid.style = { index, _ in
             TextGridView.Style(

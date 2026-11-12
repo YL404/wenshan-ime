@@ -93,13 +93,6 @@ enum KeyboardPalette {
             : UIColor(white: 0.86, alpha: 1)
     }
 
-    /// 面板底色：盖住键区时用不透明的系统底色，避免键影透出来。
-    static let panel = UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(white: 0.16, alpha: 1)
-            : UIColor(white: 0.94, alpha: 1)
-    }
-
     static var accent: UIColor { KeyboardSettings.accentColor(traits: traits) }
 }
 

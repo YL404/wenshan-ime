@@ -65,7 +65,8 @@ final class SymbolPanelView: UIView {
 
         translatesAutoresizingMaskIntoConstraints = false
         accessibilityIdentifier = "symbol_panel"
-        backgroundColor = KeyboardPalette.panel
+        // 不画自己的底板：和字母页/数字页一样露出 UIInputView 的系统键盘材质。
+        backgroundColor = .clear
 
         header.axis = .horizontal
         header.spacing = 4

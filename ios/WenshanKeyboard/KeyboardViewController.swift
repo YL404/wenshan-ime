@@ -361,6 +361,9 @@ final class KeyboardViewController: UIInputViewController {
         overlay = next
         candidatePanel.isHidden = next != .candidates
         symbolPanel.isHidden = next != .symbols
+        // 面板不画底板时，把键帽一起隐掉，只留 UIInputView 的系统键盘材质。
+        // 键区仍占着布局，收起面板后原位恢复。
+        keyboardStack.alpha = next == .none ? 1 : 0
         keyboardStack.accessibilityElementsHidden = next != .none
         keyboardStack.isUserInteractionEnabled = next == .none
         let focus: UIView
