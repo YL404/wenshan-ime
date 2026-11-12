@@ -56,9 +56,12 @@ pkill -f "Input Methods/Wenshan.app"; rm -rf ~/Library/Input\ Methods/Wenshan.ap
 ## iOS
 
 `ios/` 下是 Swift 6 键盘扩展，直接复用 `swift/Sources/WenshanCore` 的规则层。
-已接通候选条编码区、中英切换、Shift、符号页、按键预览、
-删除连发、空格拖光标和 iPad 分档布局，以及用户词频/自造词/短语加载；仍在模拟器验证
-阶段，真机内存和发布化未完成。构建、无头模拟器验证和已知限制见
+键盘底板用系统 `UIInputView` 的原生材质，候选字号跟随 Dynamic Type，强调色可在宿主
+App 里选；预编辑作为 marked text 写进输入框，候选条只显示词块与展开键。已接通
+中英切换、Shift、符号页、按键预览、删除长按按音节退、空格拖光标、触点纠错、
+成对标点与智能标点、候选长按置顶/删除、每页候选数和诊断日志，以及用户词频/
+自造词/短语加载；仍在模拟器验证阶段，真机内存和发布化未完成。构建、无头模拟器
+验证和已知限制见
 [ios/README.md](ios/README.md)。
 
 ## 按键

@@ -10,9 +10,22 @@ Swift 规则层 + Swift 6 键盘扩展。直接复用 `swift/Sources/WenshanCore
 加载。地球键只在系统要求切换输入模式时出现。标点、全半角、Shift、英文候选和自动补空格与 macOS
 共用 `swift/Sources/WenshanCore`，iOS 只保留触摸按键和渲染。
 
+展示走原生皮肤：键盘底板交给 `UIInputView` 的系统材质，字母键与功能键同色、圆角 6pt、
+不画底边阴影；首选候选用强调色字而不填底，强调色可在宿主 App 的「键盘」页里选；
+候选字号按 Dynamic Type 的 `.body` 缩放并夹到 12–24（iPad 12–32），键帽字号固定。
+空闲工具栏和候选条仍占同一块顶栏，输入切换时按键不跳。
+
+打字体验：删除长按一次退一个完整音节（双拼两键）；字母键按下时注册真实落点，纠错按
+「离目标键心更近」加权；成对标点自动补全并把光标放回中间，右半边已存在时只跨过；
+两秒内重按 ASCII 逗号/句点/冒号转中文标点，中文标点后按空格可改回半角（默认关）。
+候选长按菜单除了取首/尾字，还能把词条置顶到当前编码或删除（自造词和词频一起清）。
+宿主 App 的「键盘」页还能设默认中英文、沿用上次模式、每页候选数（1–9）、触感强度和
+动态字号；「诊断」页开关日志、查看记录，日志只写事件名和 `phys_footprint` 等内存读数。
+偏好存 App Group 的 UserDefaults，键盘下次出现时应用，不重建引擎会话。
+
 底行按微信键盘/系统键盘的层级排：`123`、地球、句号/逗号小键、宽空格、`中/英`、发送/换行；
 Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻点上屏 `。`，长按上屏 `，`；
-英文态显示 `.` / `,`。发送/搜索/完成等非默认回车键显示蓝色，长按换行。`123` 打开三列数字九宫格，
+英文态显示 `.` / `,`。发送/搜索/完成等非默认回车键用强调色高亮，长按换行。`123` 打开三列数字九宫格，
 右侧一列是删除、空格、回车和 ABC；九宫格的「符」打开分类符号面板，字母层长按 `123` 也能直接打开。
 没有输入时顶栏显示「文山」、当前模式和全/半角开关；开始输入后同一位置换成候选词块，点右侧展开键
 看全部候选。
@@ -20,9 +33,12 @@ Z 行 Shift/删除比字母键宽，A 行左右各缩进半个键。句号键轻
 ## 结构
 
 - `Shared/AppGroup.swift`：App Group 标识和共享目录路径。
+- `Shared/KeyboardSettings.swift`：本机键盘偏好（模式、页大小、强调色、字号、触感、诊断）。
+- `Shared/KeyboardDiagnostic.swift`：只记事件名和内存读数的诊断日志。
 - `WenshanHost/`：宿主 App。
   - `Assets.xcassets`：App 图标。`swift/Sources/icon` 生成满版 1024 图，圆角由 iOS 自己裁。
   - `ContentView.swift`：启用说明、用户数据统计/清空、测试输入框。
+    另有「键盘」和「诊断」两组设置。
 - `WenshanKeyboard/`：键盘扩展。
   - `WenshanBridge.swift`：`WenshanCore` 的 Swift 门面，唯一持有引擎状态的地方；打开中文和英文
     词表只是 mmap 加校验文件头，和按键一样在主线程，不加锁。光标前正文由 VC 经 `KeyboardModel.contextBefore` 提供。
@@ -42,7 +58,9 @@ App Group: group.im.wenshan.ios
   └─ Data/
        ├─ freq.tsv
        ├─ userdict.tsv
-       └─ phrases.tsv
+       ├─ phrases.tsv
+       ├─ diagnostic.log（可选，只记事件名和内存读数）
+       └─ Library/Preferences/*.plist（键盘偏好，UserDefaults suite）
 WenshanKeyboard
   ├─ 直接 mmap 扩展 Bundle 里的 dict.bin 和 english.bin，随 App 一起更新，不整块复制
   └─ 用户数据写共享目录；没有完全访问时退回扩展 Documents
@@ -126,7 +144,10 @@ function run([udid, developerDir]) {
 
 ## 已知边界
 
-- 还没有真机内存数据；iPad/横屏高度和字号是按档位估算，未做截图校准。
+- 还没有真机内存数据；诊断日志已能记 `phys_footprint` 和可用余量，真机 Release
+  仍需用 Instruments 测冷启动、首次输入、100 次上屏和 10 分钟空闲，目标控制在
+  50 MB 以内（fcitx5-ios 记录的键盘扩展 jetsam 硬上限是 77 MB）。
+- iPad/横屏高度和字号是按档位估算，未做截图校准。
 - 还没有硬件键盘映射；触感需要完全访问。
 - 用户数据只在本地；没有 iCloud/WebDAV 同步。`phrases.tsv` 目前需要手动放到
   App Group 的 `Data/` 下，宿主还没有短语编辑器。
