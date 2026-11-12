@@ -26,6 +26,8 @@ private func configureToolbarButton(
     button.backgroundColor = KeyboardPalette.key
     button.layer.cornerRadius = 7
     button.layer.cornerCurve = .continuous
+    button.layer.borderWidth = 1
+    button.layer.borderColor = KeyboardPalette.keyBorder.cgColor
     button.translatesAutoresizingMaskIntoConstraints = false
     button.addAction(UIAction { _ in action() }, for: .touchUpInside)
 }
@@ -68,7 +70,7 @@ final class ToolbarBar: UIView {
         brandLabel.accessibilityLabel = "文山输入法"
 
         statusLabel.font = .systemFont(ofSize: 12)
-        statusLabel.textColor = .secondaryLabel
+        statusLabel.textColor = .label
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.adjustsFontSizeToFitWidth = true
         statusLabel.minimumScaleFactor = 0.8
@@ -115,7 +117,7 @@ final class ToolbarBar: UIView {
 
     func setStatus(_ text: String?, isError: Bool = false, hint: String? = nil) {
         statusLabel.text = text
-        statusLabel.textColor = isError ? .systemRed : .secondaryLabel
+        statusLabel.textColor = isError ? .systemRed : .label
         statusLabel.accessibilityHint = hint
         statusLabel.isHidden = text == nil
     }
@@ -326,6 +328,8 @@ final class CandidateCell: PressableCell {
         super.init(frame: frame)
         contentView.layer.cornerCurve = .continuous
         contentView.clipsToBounds = true
+        contentView.backgroundColor = KeyboardPalette.gridCell
+        contentView.layer.cornerRadius = 7
 
         label.font = .systemFont(ofSize: 20)
         label.textColor = .label
@@ -349,8 +353,6 @@ final class CandidateCell: PressableCell {
         label.text = text
         label.font = isFirst ? .systemFont(ofSize: font.pointSize, weight: .semibold) : font
         label.textColor = isFirst ? KeyboardPalette.accent : .label
-        contentView.backgroundColor = .clear
-        contentView.layer.cornerRadius = 0
         accessibilityIdentifier = "candidate_\(index)"
         accessibilityLabel = text
         accessibilityValue = isFirst ? "首选" : nil

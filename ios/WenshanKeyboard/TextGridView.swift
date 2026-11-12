@@ -165,8 +165,8 @@ final class GridCell: PressableCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        contentView.backgroundColor = .clear
-        contentView.layer.cornerRadius = 0
+        contentView.backgroundColor = KeyboardPalette.gridCell
+        contentView.layer.cornerRadius = 7
         contentView.layer.cornerCurve = .continuous
         contentView.clipsToBounds = true
 

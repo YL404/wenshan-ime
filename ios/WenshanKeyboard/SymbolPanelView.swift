@@ -93,7 +93,7 @@ final class SymbolPanelView: UIView {
                 systemName: "xmark",
                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)),
             for: .normal)
-        close.tintColor = .secondaryLabel
+        close.tintColor = .label
         close.accessibilityIdentifier = "symbol_panel_close"
         close.accessibilityLabel = "关闭符号面板"
         close.addAction(UIAction { [weak self] _ in
@@ -147,8 +147,8 @@ final class SymbolPanelView: UIView {
         symbols = Self.categories[index].symbols
         for (buttonIndex, button) in categoryButtons.enumerated() {
             let active = buttonIndex == index
-            button.backgroundColor = active ? KeyboardPalette.key : .clear
-            button.setTitleColor(active ? .label : .secondaryLabel, for: .normal)
+            button.backgroundColor = active ? KeyboardPalette.key : KeyboardPalette.gridCell
+            button.setTitleColor(.label, for: .normal)
         }
         grid.setItems(symbols)
     }

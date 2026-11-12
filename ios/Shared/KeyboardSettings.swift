@@ -72,6 +72,7 @@ enum KeyboardSettings {
     }
 
     /// 强调色名对应的动态色，以及可选的自定义 RGB（custom 时读这里）。
+    /// 浅色键盘底板是浅灰，系统色偏亮，统一给一档加深的高对比版本。
     static func accentColor(traits: UITraitCollection) -> UIColor {
         if accentName == "custom" {
             let red = defaults.double(forKey: "accentRed")
@@ -80,7 +81,24 @@ enum KeyboardSettings {
             return UIColor(red: red, green: green, blue: blue, alpha: 1)
         }
         let resolved = UITraitCollection(userInterfaceStyle: traits.userInterfaceStyle)
-        return namedAccent(accentName).resolvedColor(with: resolved)
+        let named = namedAccent(accentName).resolvedColor(with: resolved)
+        guard traits.userInterfaceStyle != .dark else { return named }
+        return deepened(named)
+    }
+
+    /// 把系统强调色压暗到在浅灰底板上仍有足够对比度。
+    private static func deepened(_ color: UIColor) -> UIColor {
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        else { return color }
+        return UIColor(
+            hue: hue,
+            saturation: min(1, saturation * 1.05),
+            brightness: brightness * 0.80,
+            alpha: alpha)
     }
 
     static func namedAccent(_ name: String) -> UIColor {

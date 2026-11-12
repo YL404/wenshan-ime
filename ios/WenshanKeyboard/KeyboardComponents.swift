@@ -82,15 +82,30 @@ enum KeyboardPalette {
             ? UIColor(white: 0.28, alpha: 1)
             : .white
     }
+    /// 浅色下功能键比字母键略灰一档，把层级从浅灰底板上分出来。
     static let functionKey = UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(white: 0.28, alpha: 1)
-            : .white
+            : UIColor(white: 0.93, alpha: 1)
     }
     static let pressed = UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(white: 0.42, alpha: 1)
             : UIColor(white: 0.86, alpha: 1)
+    }
+
+    /// 二级面板里每格的极淡底：浅色下给文字一个落点，深色下仍融进底板。
+    static let gridCell = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 1, alpha: 0.06)
+            : UIColor(white: 1, alpha: 0.55)
+    }
+
+    /// 浅色下顶栏按钮的细描边，把白键帽从浅灰底板上勾出来。
+    static let keyBorder = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor.clear
+            : UIColor(white: 0.82, alpha: 1)
     }
 
     static var accent: UIColor { KeyboardSettings.accentColor(traits: traits) }
