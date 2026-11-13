@@ -25,9 +25,10 @@ final class KeyboardViewController: UIInputViewController {
     private let root = UIStackView()
     private let keyPreview = KeyPreviewView()
     private let keyEvents = KeyEventQueue()
-    private let keyFeedback = UIImpactFeedbackGenerator(style: .light)
+    private var keyFeedback = UIImpactFeedbackGenerator(style: .medium)
     private let selectionFeedback = UISelectionFeedbackGenerator()
-    private var keyFeedbackStyle: UIImpactFeedbackGenerator.FeedbackStyle = .light
+    private var keyFeedbackStyle: UIImpactFeedbackGenerator.FeedbackStyle = .medium
+    private var keyFeedbackIntensity: CGFloat? = 0.8
     private let diagnostic = KeyboardDiagnostic()
     private var heightConstraint: NSLayoutConstraint!
     private var topBarHeightConstraint: NSLayoutConstraint!
@@ -474,16 +475,12 @@ final class KeyboardViewController: UIInputViewController {
 
     private func playKeyFeedback() {
         guard hasFullAccess else { return }
-        let (style, intensity) = KeyboardSettings.hapticStyle()
-        let generator = style == keyFeedbackStyle
-            ? keyFeedback
-            : UIImpactFeedbackGenerator(style: style)
-        if let intensity {
-            generator.impactOccurred(intensity: intensity)
+        if let intensity = keyFeedbackIntensity {
+            keyFeedback.impactOccurred(intensity: intensity)
         } else {
-            generator.impactOccurred()
+            keyFeedback.impactOccurred()
         }
-        generator.prepare()
+        keyFeedback.prepare()
     }
 
     private func playSelectionFeedback() {
@@ -530,7 +527,12 @@ final class KeyboardViewController: UIInputViewController {
         model.setCandidatePageSize(KeyboardSettings.candidatePageSize)
         model.setSpaceRevertsPunctuation(KeyboardSettings.spaceRevertsPunctuation)
         model.setSmartPunctuation(true)
-        keyFeedbackStyle = KeyboardSettings.hapticStyle().0
+        let (style, intensity) = KeyboardSettings.hapticStyle()
+        if style != keyFeedbackStyle {
+            keyFeedback = UIImpactFeedbackGenerator(style: style)
+            keyFeedbackStyle = style
+        }
+        keyFeedbackIntensity = intensity
         diagnostic.isEnabled = KeyboardSettings.diagnosticLog
         candidateBar.setCandidateFont(currentCandidateFont())
         candidatePanel.setFont(currentCandidateFont())
@@ -574,7 +576,8 @@ final class KeyboardViewController: UIInputViewController {
         let chinese = model.mode == .chinese
         keys.shift?.setTitle(model.shift == .locked ? "⇪" : "⇧", for: .normal)
         keys.shift?.setActive(model.shift.isActive)
-        keys.mode?.setActive(!chinese)
+        keys.mode?.setTitle(chinese ? "中" : "英", for: .normal)
+        keys.mode?.accessibilityLabel = chinese ? "中文模式，点击切换英文" : "英文模式，点击切换中文"
         keys.punctuation?.setTitle(chinese ? "。\n，" : ".\n,", for: .normal)
         keys.punctuation?.previewText = chinese ? "。" : "."
         keys.returnKey?.setTitle(model.returnKeyTitle, for: .normal)

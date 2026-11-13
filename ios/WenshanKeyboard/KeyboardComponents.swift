@@ -203,6 +203,8 @@ final class KeyButton: UIButton {
     var repeatInterval: TimeInterval = 0.1
     /// 空格等键要先长按激活，再拖动才生效，避免轻点空格时误移光标。
     var dragRequiresLongPress = false
+    /// 仅向左拖动才进入拖拽态（删除键防向右微移误断连发）。
+    var dragOnlyLeft = false
     var dragStep: CGFloat = 10
     /// 拖动时允许的垂直偏移；超过后不再移动光标。
     var dragVerticalLimit: CGFloat?
@@ -309,12 +311,12 @@ final class KeyButton: UIButton {
             touchPoint = KeyPoint(x: point.x, y: point.y)
         }
         lastDragStep = 0
-        onPressChanged?(true)
         if triggersOnPress {
             didRepeat = true
             (onPress ?? onRepeat)?()
         }
         startTimers()
+        onPressChanged?(true)
         return true
     }
 
@@ -327,8 +329,9 @@ final class KeyButton: UIButton {
         let dx = location.x - dragStartX
         let dy = location.y - dragStartY
         if let dragVerticalLimit, abs(dy) > dragVerticalLimit { return result }
-        guard abs(dx) >= dragStep else { return result }
         if !isDragging {
+            let crossed = dragOnlyLeft ? dx <= -dragStep : abs(dx) >= dragStep
+            guard crossed else { return result }
             isDragging = true
             didRepeat = true
             cancelRepeatTimers()

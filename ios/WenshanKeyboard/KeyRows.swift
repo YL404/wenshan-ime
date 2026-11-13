@@ -178,11 +178,9 @@ struct KeyRowsBuilder {
         keys.punctuation = punctuation
 
         let mode = makeKey(
-            title: "中\n英", identifier: "key_mode", action: .toggleMode,
-            font: smallFont, showsPreview: false)
-        mode.titleLabel?.numberOfLines = 2
-        mode.titleLabel?.textAlignment = .center
-        mode.accessibilityLabel = "切换中英文"
+            title: "中", identifier: "key_mode", action: .toggleMode,
+            font: functionFont, showsPreview: false)
+        mode.accessibilityLabel = "中文模式，点击切换英文"
         keys.mode = mode
 
         let returnKey = makeReturnKey()
@@ -255,6 +253,10 @@ struct KeyRowsBuilder {
         // 删除按下即生效、按住连发，不进按键队列。
         delete.queuesEvent = false
         delete.triggersOnPress = true
+        delete.repeatDelay = 0.25
+        delete.repeatInterval = 0.065
+        delete.dragStep = 18
+        delete.dragOnlyLeft = true
         delete.onPress = {
             host?.perform(.backspace)
         }
