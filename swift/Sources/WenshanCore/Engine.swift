@@ -287,7 +287,7 @@ public final class Engine {
         if exhausted {
             normal.append(contentsOf: corrections(buf, normal))
         }
-        stream = englishCandidates(normal)
+        stream = englishCandidates(normal, includeTail: exhausted)
         if page * pageSize < stream.count {
             setPage(page)
         }
@@ -296,7 +296,7 @@ public final class Engine {
     /// 英文候选的安插规则：精确命中整串的英文词放到中文首选之后（第 2 位），
     /// 只匹配到前缀的补全词追加到候选末尾；两者都不命中时给一条原文兜底。
     /// 大小写由预编辑串推导，词库里的 display 只作为基准形态。
-    func englishCandidates(_ normal: [Candidate]) -> [Candidate] {
+    func englishCandidates(_ normal: [Candidate], includeTail: Bool) -> [Candidate] {
         guard let english, englishQuery, !buf.isEmpty else { return normal }
         let lower = Array(String(decoding: buf, as: UTF8.self).lowercased().utf8)
         guard lower.count >= englishMinExact,
@@ -304,31 +304,44 @@ public final class Engine {
         else { return normal }
         let exact = english.lookup(lower, exactOnly: true, limit: englishMaxCandidates)
         let prefix = lower.count >= englishMinPrefix
-            ? english.lookup(lower, exactOnly: false, limit: englishMaxCandidates)
+            ? english.lookup(lower, exactOnly: false, limit: englishMaxCandidates + exact.count)
                 .filter { !$0.exact }
             : []
         var out = normal
         if exact.isEmpty && prefix.isEmpty {
+            guard includeTail else { return out }
             // 词表不认识这串字母：给一条原文兜底，让「中文态直接打英文」仍可选。
             let raw = englishDisplay(String(decoding: buf, as: UTF8.self))
-            out.append(Candidate(raw, buf.count, englishScore(tierEnglishRaw, 0)))
+            if !hasText(out, raw) {
+                out.append(Candidate(raw, buf.count, englishScore(tierEnglishRaw, 0)))
+            }
             return out
         }
-        let shown = Set(exact.map { englishDisplay($0.display) })
-        var inserted = 0
-        for m in prefix where !shown.contains(englishDisplay(m.display)) {
-            out.append(Candidate(
-                englishDisplay(m.display), buf.count,
-                englishScore(tierEnglishPrefix, m.weight)))
-            inserted += 1
-            if inserted >= englishMaxCandidates { break }
-        }
-        // 插在中文首选之后；没有中文候选时英文词自然排第一。
-        var at = min(1, out.count)
+        let hasUppercase = buf.contains { $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z") }
+        let topIsFullMatch = (out.first?.score ?? 0) >> 40 >= Int64(tierCompose)
+        // 用户主动按了 Shift（含驼峰词）且中文只命中了半截前缀时，英文精确词应排首位；
+        // 普通全小写输入保持中文首选在第一，免得英文短词抢空格。
+        var at = (hasUppercase && !topIsFullMatch) ? 0 : min(1, out.count)
+        var shown = Set<String>()
         for m in exact {
             let text = englishDisplay(m.display)
+            shown.insert(text)
+            if hasText(out, text) { continue }
             out.insert(Candidate(text, buf.count, englishScore(tierEnglishExact, m.weight)), at: at)
             at += 1
+        }
+        if includeTail {
+            var inserted = 0
+            for m in prefix {
+                let text = englishDisplay(m.display)
+                if shown.contains(text) || hasText(out, text) { continue }
+                shown.insert(text)
+                out.append(Candidate(
+                    text, buf.count,
+                    englishScore(tierEnglishPrefix, m.weight)))
+                inserted += 1
+                if inserted >= englishMaxCandidates { break }
+            }
         }
         return out
     }
@@ -436,6 +449,15 @@ public final class Engine {
         if i >= stream.count { return ("", false) }
         cands = stream
         return select(i)
+    }
+
+    /// 选出流里第 i 个候选的首字或尾字，索引可以落在后续页。
+    public func selectCharGlobal(_ i: Int, last: Bool) -> (String, Bool) {
+        if i < 0 { return ("", false) }
+        ensure(i + 1)
+        if i >= stream.count { return ("", false) }
+        cands = stream
+        return selectChar(i, last: last)
     }
 }
 

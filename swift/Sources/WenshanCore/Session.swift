@@ -157,6 +157,7 @@ public final class Session {
     @discardableResult
     public func type(_ ch: UInt8) -> Result {
         guard mode == .chinese, let eng else { return result("", false) }
+        if eng.buffer.isEmpty { englishRun = false }
         var c = ch
         if !englishRun, c >= UInt8(ascii: "A"), c <= UInt8(ascii: "Z") {
             c += UInt8(ascii: "a") - UInt8(ascii: "A")
@@ -211,14 +212,16 @@ public final class Session {
                         return res
                     }
                     lastASCIIDirect = (ch, now)
-                    return result(fallback, true)
+                    lastCJKPunct = nil
+                    return result(commitText(out, fallback), true)
                 }
                 lastASCIIDirect = (ch, now)
+                lastCJKPunct = nil
+                return result(commitText(out, inserted), true)
             }
         }
-        if !Self.repeatablePuncts.contains(text.utf8.first ?? 0) {
-            lastCJKPunct = nil
-        }
+        lastASCIIDirect = nil
+        lastCJKPunct = nil
         return result(commitText(out, inserted), true)
     }
 
@@ -250,8 +253,11 @@ public final class Session {
     public func backspace() -> Result {
         if mode == .chinese && !buffer.isEmpty {
             _ = eng?.backspace()
+            if buffer.isEmpty { englishRun = false }
             return result("", true)
         }
+        lastASCIIDirect = nil
+        lastCJKPunct = nil
         return result("", false)
     }
 
@@ -259,8 +265,11 @@ public final class Session {
     public func backspaceSyllable() -> Result {
         if mode == .chinese && !buffer.isEmpty {
             _ = eng?.backspaceSyllable()
+            if buffer.isEmpty { englishRun = false }
             return result("", true)
         }
+        lastASCIIDirect = nil
+        lastCJKPunct = nil
         return result("", false)
     }
 
@@ -299,9 +308,16 @@ public final class Session {
         return selected(eng.selectGlobal(i))
     }
 
+    /// 取全部候选里第 i 个候选的首字或尾字，索引可以落在后续页。
+    public func selectCharGlobal(_ i: Int, last: Bool) -> Result {
+        guard let eng else { return result("", false) }
+        return selected(eng.selectCharGlobal(i, last: last))
+    }
+
     /// 把引擎选出的文字按补空格规则上屏。
     func selected(_ r: (String, Bool)) -> Result {
         guard r.1 else { return result("", false) }
+        if buffer.isEmpty { englishRun = false }
         return result(commitText("", r.0), true)
     }
 
@@ -326,7 +342,27 @@ public final class Session {
             }
         }
 
-        var punct = punctuateChar(ch, alts)
+        var punct: String
+        if pairPunctuation && alts.count == 2,
+           let openScalar = alts[0].unicodeScalars.first, alts[0].unicodeScalars.count == 1,
+           let closeScalar = alts[1].unicodeScalars.first, alts[1].unicodeScalars.count == 1 {
+            // 成对标点打开时，引号优先检查是不是跨过右半边，否则总是成对打开，
+            // 不再受交替开关影响输出单个右引号。
+            let right = lookahead?()
+            let pending = pairStack.last?.close
+            if right == closeScalar || (right == nil && pending == closeScalar) {
+                if pending == closeScalar { pairStack.removeLast() }
+                lastASCIIDirect = nil
+                lastCJKPunct = nil
+                return result(out, true, caretOffset: 1)
+            }
+            pairStack.append((closeScalar, editorGeneration))
+            lastASCIIDirect = nil
+            lastCJKPunct = nil
+            return result(out + String(openScalar) + String(closeScalar), true, caretOffset: -1)
+        } else {
+            punct = punctuateChar(ch, alts)
+        }
         if ch == UInt8(ascii: ".") && digitBefore(out) {
             punct = "."
         }
@@ -350,7 +386,7 @@ public final class Session {
                 return result(out + String(scalar) + String(close), true, caretOffset: -1)
             }
         }
-        if punct.unicodeScalars.count == 1 {
+        if punct.unicodeScalars.count == 1 && ASCIIPunct[punct] != nil {
             lastCJKPunct = (punct, now, editorGeneration)
         } else {
             lastCJKPunct = nil
@@ -419,7 +455,9 @@ public final class Session {
     /// 上屏一段文字，并在中文紧跟英文/数字时补一个空格。
     func commitText(_ pending: String, _ text: String) -> String {
         if text.isEmpty { return pending }
-        if classOf(text) == .cjk && classBefore(pending) == .ascii {
+        let c = classOf(text)
+        let before = classBefore(pending)
+        if (c == .cjk && before == .ascii) || (c == .ascii && before == .cjk) {
             return pending + " " + text
         }
         return pending + text

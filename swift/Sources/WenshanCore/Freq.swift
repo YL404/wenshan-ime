@@ -77,16 +77,19 @@ public final class Freq {
             let key = context + "\t" + text
             pairs[key, default: 0] += 1
         }
-        // 一次上屏可能是一个整句或组句拼出来的长词，把内部的相邻字也记成
-        // 单字接续，组句时逐段就能用上，不必等这个词再被单独选一次。
-        let chars = Array(text)
-        if chars.count > 1 {
-            for i in 1..<chars.count {
-                let key = String(chars[i - 1]) + "\t" + String(chars[i])
-                pairs[key, default: 0] += 1
+        let isASCIIOnly = text.utf8.allSatisfy { $0 < 0x80 }
+        if !isASCIIOnly {
+            // 一次上屏可能是一个整句或组句拼出来的长词，把内部的相邻字也记成
+            // 单字接续，组句时逐段就能用上，不必等这个词再被单独选一次。
+            let chars = Array(text)
+            if chars.count > 1 {
+                for i in 1..<chars.count {
+                    let key = String(chars[i - 1]) + "\t" + String(chars[i])
+                    pairs[key, default: 0] += 1
+                }
             }
+            if let last = text.last { context = String(last) }
         }
-        if let last = text.last { context = String(last) }
         dirty += 1
     }
 
@@ -98,11 +101,14 @@ public final class Freq {
     public func remove(_ text: String) -> Bool {
         guard !text.isEmpty else { return false }
         let removedCounts = counts.removeValue(forKey: text) != nil
-        var removedPairs = false
-        for key in pairs.keys where key.hasSuffix("\t" + text) || key.hasPrefix(text + "\t") {
+        let suffix = "\t" + text
+        let prefix = text + "\t"
+        let matchingKeys = pairs.keys.filter { $0.hasSuffix(suffix) || $0.hasPrefix(prefix) }
+        for key in matchingKeys {
             pairs.removeValue(forKey: key)
-            removedPairs = true
         }
+        if context == text { context = "" }
+        let removedPairs = !matchingKeys.isEmpty
         if removedCounts || removedPairs {
             dirty += 1
             return true

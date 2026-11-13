@@ -83,6 +83,8 @@ final class TouchAndGestureTests: XCTestCase {
         let e = Engine(dict: buildDict([
             Entry(code: "ni", text: "你", weight: 2500),
             Entry(code: "ni", text: "泥", weight: 100),
+            Entry(code: "nihk", text: "你好", weight: 2500),
+            Entry(code: "nihk", text: "泥好", weight: 100),
         ]))
         let user = UserDict(path: dir.appendingPathComponent("userdict.tsv").path)
         e.setUserDict(user)
@@ -93,6 +95,54 @@ final class TouchAndGestureTests: XCTestCase {
         XCTAssertTrue(e.manage("泥", pin: false))
         XCTAssertNotEqual(e.candidates.first?.text, "泥")
         XCTAssertEqual(user.count, 0)
+
+        e.reset()
+        XCTAssertTrue(user.add(code: "nihk", text: "拟好"))
+        typeKeys(e, "nihk")
+        XCTAssertTrue(e.manage("拟好", pin: true), "已存在的普通自造词也能升级置顶")
+        XCTAssertEqual(e.candidates.first?.text, "拟好")
+        XCTAssertTrue(e.manage("泥好", pin: true), "同编码新置顶的词应超过之前置顶的词")
+        XCTAssertEqual(e.candidates.first?.text, "泥好")
+    }
+
+    func testSelectCharGlobalBeyondFirstPage() {
+        let e = Engine(dict: buildDict([
+            Entry(code: "ni", text: "你好", weight: 400),
+            Entry(code: "ni", text: "泥土", weight: 300),
+            Entry(code: "ni", text: "逆流", weight: 200),
+            Entry(code: "ni", text: "拟订", weight: 100),
+        ]))
+        e.pageSize = 2
+        let s = Session(eng: e)
+        typeKeys(s, "ni")
+        XCTAssertEqual(s.selectCharGlobal(3, last: true).text, "订")
+        XCTAssertTrue(s.preedit.isEmpty)
+    }
+
+    func testPairedQuotesAlwaysOpenOutsidePair() {
+        let (s, _) = withDoc("")
+        s.pairPunctuation = true
+        let first = s.punctuate(UInt8(ascii: "\""))
+        XCTAssertEqual(first.text, "“”")
+        XCTAssertEqual(first.caretOffset, -1)
+        // 光标离开配对位置后，再次按引号应继续成对打开，不能受交替状态输出单边右引号。
+        s.editorDidChange()
+        let second = s.punctuate(UInt8(ascii: "\""))
+        XCTAssertEqual(second.text, "“”")
+        XCTAssertEqual(second.caretOffset, -1)
+    }
+
+    func testDirectNonPunctClearsRepeatPunctState() {
+        let (s, d) = withDoc("")
+        s.smartPunctuation = true
+        let comma1 = s.direct(",")
+        d.insert(comma1.text)
+        let letter = s.direct("a")
+        d.insert(letter.text)
+        d.delete(1)
+        let comma2 = s.direct(",")
+        XCTAssertEqual(comma2.text, ",")
+        XCTAssertEqual(comma2.deleteBefore, 0)
     }
 
     func testTypoBonusPrefersCloserKey() {

@@ -73,11 +73,19 @@ public final class UserDict {
     /// 把词条按当前编码置顶；同编码已有这个词时不重复添加。
     @discardableResult
     public func pin(_ text: String, code: String) -> Bool {
-        guard !text.isEmpty, code.utf8.count >= 2 else { return false }
-        for entry in entries where entry.code == code && entry.text == text {
-            return false
+        guard !text.isEmpty, !code.isEmpty else { return false }
+        let topOther = entries
+            .filter { $0.code == code && $0.text != text }
+            .map(\.weight)
+            .max() ?? 0
+        let targetWeight = max(pinnedWeight, min(UInt32.max, topOther &+ 60_000_000))
+        if let idx = entries.firstIndex(where: { $0.code == code && $0.text == text }) {
+            guard entries[idx].weight < targetWeight else { return false }
+            entries[idx].weight = targetWeight
+            dirty += 1
+            return true
         }
-        entries.append(Entry(code: code, text: text, weight: pinnedWeight))
+        entries.append(Entry(code: code, text: text, weight: targetWeight))
         dirty += 1
         return true
     }

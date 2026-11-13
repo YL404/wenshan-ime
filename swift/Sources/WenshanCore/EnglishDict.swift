@@ -154,7 +154,6 @@ extension EnglishDict {
                             weight: weight(raw, i)))
                     }
                     i += 1
-                    if out.count >= limit && !exactOnly { break }
                     if exactOnly && exact && out.count >= limit { break }
                 }
                 // 前缀按权重排序：词库文件顺序只保证编码升序，同前缀内部要重排。
@@ -163,6 +162,7 @@ extension EnglishDict {
                     if a.weight != b.weight { return a.weight > b.weight }
                     return a.display.utf8.lexicographicallyPrecedes(b.display.utf8)
                 }
+                if out.count > limit { out.removeLast(out.count - limit) }
                 return out
             }
         }
