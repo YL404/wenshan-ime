@@ -9,6 +9,9 @@ final class DocumentWriter {
     private(set) var hasMarkedText = false
     /// 同步写正文期间为 true。宿主同步回调 textDidChange 时用来忽略自己的改动。
     private(set) var isWriting = false
+    private var recentEditDeadline: TimeInterval = 0
+    private var recentBeforeSuffix = ""
+    private var recentAfterPrefix = ""
 
     init(proxy: @escaping () -> UITextDocumentProxy) {
         self.proxy = proxy
@@ -66,13 +69,44 @@ final class DocumentWriter {
     }
 
     func moveCursor(by steps: Int) {
-        proxy().adjustTextPosition(byCharacterOffset: steps)
+        write { $0.adjustTextPosition(byCharacterOffset: steps) }
     }
 
     /// 部分宿主会在 setMarkedText 之后异步回调 textDidChange，这时 isWriting
     /// 早已复位。光标前仍以当前预编辑串结尾，说明改动来自自己的组合。
     func endsWithMarkedText(_ preedit: String) -> Bool {
         hasMarkedText && !preedit.isEmpty && contextBefore.hasSuffix(preedit)
+    }
+
+    func recordOwnEdit(beforeSuffix: String, afterPrefix: String) {
+        recentEditDeadline = ProcessInfo.processInfo.systemUptime + 0.25
+        recentBeforeSuffix = beforeSuffix
+        recentAfterPrefix = afterPrefix
+    }
+
+    func clearRecentOwnEdit() {
+        recentEditDeadline = 0
+        recentBeforeSuffix = ""
+        recentAfterPrefix = ""
+    }
+
+    /// 宿主在 insertText / adjustTextPosition 后常跨进程异步回传 textDidChange 或
+    /// selectionDidChange；短时间内上下文仍符合刚才写入结果时，不当作外部切光标。
+    func isOwnAsyncChange(preedit: String) -> Bool {
+        if isWriting || endsWithMarkedText(preedit) { return true }
+        guard preedit.isEmpty,
+              ProcessInfo.processInfo.systemUptime <= recentEditDeadline
+        else { return false }
+        if !recentBeforeSuffix.isEmpty && !contextBefore.hasSuffix(recentBeforeSuffix) {
+            return false
+        }
+        if !recentAfterPrefix.isEmpty {
+            let after = contextAfter
+            if !after.isEmpty && !after.hasPrefix(recentAfterPrefix) {
+                return false
+            }
+        }
+        return true
     }
 
     private func write(_ body: (UITextDocumentProxy) -> Void) {

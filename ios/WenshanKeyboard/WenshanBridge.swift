@@ -140,7 +140,13 @@ final class WenshanBridge {
         engine?.setTouchPoint(letter, point)
     }
     func editorDidChange() { session?.editorDidChange() }
-    func manage(_ text: String, pin: Bool) { _ = engine?.manage(text, pin: pin) }
+
+    func manage(_ text: String, pin: Bool) -> (changed: Bool, outcome: BridgeOutcome?) {
+        guard let engine, engine.manage(text, pin: pin) else { return (false, nil) }
+        let mode = session?.currentMode ?? .chinese
+        let fullWidth = session?.isFullWidth ?? true
+        return (true, snapshot(Result(text: "", consumed: true, mode: mode, fullWidth: fullWidth)))
+    }
 
     func select(_ index: Int) -> BridgeOutcome {
         call { $0.select(index) }
@@ -152,6 +158,10 @@ final class WenshanBridge {
 
     func selectGlobal(_ index: Int) -> BridgeOutcome {
         call { $0.selectGlobal(index) }
+    }
+
+    func selectCharGlobal(_ index: Int, last: Bool) -> BridgeOutcome {
+        call { $0.selectCharGlobal(index, last: last) }
     }
 
     func punctuate(_ ch: String) -> BridgeOutcome {

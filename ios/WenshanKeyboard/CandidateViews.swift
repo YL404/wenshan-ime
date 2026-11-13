@@ -22,12 +22,17 @@ private func configureToolbarButton(
         button.backgroundColor = button.isHighlighted
             ? KeyboardPalette.pressed
             : KeyboardPalette.key
+        button.layer.borderColor = KeyboardPalette.keyBorder
+            .resolvedColor(with: button.traitCollection)
+            .cgColor
     }
     button.backgroundColor = KeyboardPalette.key
     button.layer.cornerRadius = 7
     button.layer.cornerCurve = .continuous
     button.layer.borderWidth = 1
-    button.layer.borderColor = KeyboardPalette.keyBorder.cgColor
+    button.layer.borderColor = KeyboardPalette.keyBorder
+        .resolvedColor(with: button.traitCollection)
+        .cgColor
     button.translatesAutoresizingMaskIntoConstraints = false
     button.addAction(UIAction { _ in action() }, for: .touchUpInside)
 }

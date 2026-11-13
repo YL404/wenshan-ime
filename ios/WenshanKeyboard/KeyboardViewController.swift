@@ -49,12 +49,17 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         keyboardLog.info("viewDidLoad")
-        KeyboardPalette.traits = traitCollection
         // 规则层判断中英文之间要不要补空格，读的是宿主正文里光标前的字符。
         model.contextBefore = { [weak self] in self?.writer.contextBefore ?? "" }
         model.contextAfter = { [weak self] in self?.writer.contextAfter ?? "" }
         buildUI()
         loadEngine()
+        registerForTraitChanges([
+            UITraitUserInterfaceStyle.self,
+            UITraitPreferredContentSizeCategory.self,
+        ]) { (self: KeyboardViewController, _) in
+            self.traitsDidChange()
+        }
         diagnostic.log("keyboard_loaded", memory: true)
         render()
         diagnostic.log("keyboard_built", memory: true)
@@ -63,14 +68,13 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         updateContext()
-        KeyboardPalette.traits = traitCollection
-        applySettings()
         keyFeedback.prepare()
         selectionFeedback.prepare()
         if model.phase != .ready {
             loadEngine()
         } else {
             model.reloadUserDataIfChanged()
+            applySettings()
         }
         setOverlay(.none)
         layer = .letters
@@ -99,13 +103,16 @@ final class KeyboardViewController: UIInputViewController {
         with coordinator: UIViewControllerTransitionCoordinator
     ) {
         super.willTransition(to: newCollection, with: coordinator)
-        KeyboardPalette.traits = newCollection
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.traitsDidChange()
+            self?.registerKeyGeometry()
+        }
+    }
+
+    private func traitsDidChange() {
         candidateBar.setCandidateFont(currentCandidateFont())
         candidatePanel.setFont(currentCandidateFont())
         updateKeys()
-        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
-            self?.registerKeyGeometry()
-        }
     }
 
     override func didReceiveMemoryWarning() {
@@ -118,15 +125,17 @@ final class KeyboardViewController: UIInputViewController {
         // 回车键的标题和高亮要跟着新输入框的 returnKeyType 走。
         updateContext()
         updateKeys()
-        guard !writer.isWriting, !writer.endsWithMarkedText(model.preedit) else { return }
+        guard !writer.isOwnAsyncChange(preedit: model.preedit) else { return }
         handleExternalChange()
     }
 
     override func selectionWillChange(_ textInput: UITextInput?) {
+        guard !writer.isOwnAsyncChange(preedit: model.preedit) else { return }
         handleExternalChange()
     }
 
     override func selectionDidChange(_ textInput: UITextInput?) {
+        guard !writer.isOwnAsyncChange(preedit: model.preedit) else { return }
         handleExternalChange()
     }
 
@@ -320,32 +329,46 @@ final class KeyboardViewController: UIInputViewController {
             host: self
         ).build(layer)
         keys.rows.forEach(keyboardStack.addArrangedSubview)
-        for row in keys.rows {
-            for button in row.subviews.compactMap({ $0 as? KeyButton }) {
-                button.keyArea = keyboardStack
-            }
+        for button in allKeyButtons(in: keys.rows) {
+            button.keyArea = keyboardStack
         }
     }
 
     /// 把 26 个字母键的矩形注册给规则层，触点纠错按真实落点加权。
     private func registerKeyGeometry() {
-        guard keyboardStack.bounds.width > 0 else { return }
+        guard layer == .letters, keyboardStack.bounds.width > 0 else { return }
         var frames: [KeyFrame?] = Array(repeating: nil, count: 26)
-        for row in keys.rows {
-            for case let button as KeyButton in row.subviews {
-                guard let letter = button.keyLetter else { continue }
-                let rect = button.convert(button.bounds, to: keyboardStack)
-                frames[Int(letter - UInt8(ascii: "a"))] = KeyFrame(
-                    x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
+        for button in allKeyButtons(in: keys.rows) {
+            guard let letter = button.keyLetter,
+                  button.bounds.width > 0, button.bounds.height > 0
+            else { continue }
+            let rect = button.convert(button.bounds, to: keyboardStack)
+            frames[Int(letter - UInt8(ascii: "a"))] = KeyFrame(
+                x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
+        }
+        guard frames.allSatisfy({ $0 != nil }) else { return }
+        model.setKeyFrames(frames)
+    }
+
+    /// Z 行字母键包在嵌套堆栈里，递归收集键区里全部 KeyButton。
+    private func allKeyButtons(in views: [UIView]) -> [KeyButton] {
+        var buttons: [KeyButton] = []
+        var stack = views
+        while let current = stack.popLast() {
+            if let button = current as? KeyButton {
+                buttons.append(button)
+            } else {
+                stack.append(contentsOf: current.subviews)
             }
         }
-        model.setKeyFrames(frames)
+        return buttons
     }
 
     private func showLayer(_ next: KeyboardLayer) {
         setOverlay(.none)
         layer = next
         renderKeyboardRows()
+        view.setNeedsLayout()
         render()
     }
 
@@ -409,10 +432,10 @@ final class KeyboardViewController: UIInputViewController {
         var actions: [UIMenuElement] = []
         if text.count > 1 {
             actions.append(UIAction(title: "取首字") { [weak self] _ in
-                self?.pick(self?.model.selectChar(index, last: false) ?? .idle)
+                self?.pick(self?.model.selectCharGlobal(index, last: false) ?? .idle)
             })
             actions.append(UIAction(title: "取尾字") { [weak self] _ in
-                self?.pick(self?.model.selectChar(index, last: true) ?? .idle)
+                self?.pick(self?.model.selectCharGlobal(index, last: true) ?? .idle)
             })
         }
         actions.append(UIAction(title: "置顶此候选") { [weak self] _ in
@@ -430,7 +453,7 @@ final class KeyboardViewController: UIInputViewController {
             ? (candidatePanelItems.indices.contains(index) ? candidatePanelItems[index] : nil)
             : (model.candidates.indices.contains(index) ? model.candidates[index] : nil)
         guard let text else { return }
-        model.manage(text, pin: pin)
+        guard model.manage(text, pin: pin) else { return }
         playSelectionFeedback()
         if overlay == .candidates {
             let all = model.allCandidates()
@@ -565,7 +588,18 @@ final class KeyboardViewController: UIInputViewController {
             if deleteBefore > 0 { writer.deleteBackward(times: deleteBefore) }
             writer.insert(text)
             if caretOffset != 0 { writer.moveCursor(by: caretOffset) }
+            if caretOffset < 0, text.count >= -caretOffset {
+                let split = text.index(text.endIndex, offsetBy: caretOffset)
+                writer.recordOwnEdit(
+                    beforeSuffix: String(text[..<split]),
+                    afterPrefix: String(text[split...]))
+            } else if caretOffset > 0 {
+                writer.recordOwnEdit(beforeSuffix: "", afterPrefix: "")
+            } else if !text.isEmpty {
+                writer.recordOwnEdit(beforeSuffix: text, afterPrefix: "")
+            }
         case .deleteBackward:
+            writer.clearRecentOwnEdit()
             writer.deleteBackward()
         case .handled, .idle:
             break
@@ -605,6 +639,7 @@ extension KeyboardViewController: KeyRowsHost {
             delete(times: times)
         case .moveCursor(let steps):
             guard steps != 0 else { return }
+            writer.clearRecentOwnEdit()
             writer.moveCursor(by: steps)
             playSelectionFeedback()
         case .cursorDrag:

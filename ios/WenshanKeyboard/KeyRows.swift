@@ -255,6 +255,9 @@ struct KeyRowsBuilder {
         // 删除按下即生效、按住连发，不进按键队列。
         delete.queuesEvent = false
         delete.triggersOnPress = true
+        delete.onPress = {
+            host?.perform(.backspace)
+        }
         delete.onRepeat = {
             host?.perform(.backspaceSyllable)
         }

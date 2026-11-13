@@ -41,9 +41,7 @@ final class KeyboardDiagnostic {
     }
 
     private func timestamp() -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: Date())
+        Date().ISO8601Format()
     }
 
     /// phys_footprint 是系统判断扩展是否超限用的数；avail 取 os_proc_available_memory。
@@ -65,13 +63,22 @@ final class KeyboardDiagnostic {
 
     static func read() -> String {
         guard let group = AppGroup.containerURL?.appendingPathComponent("Data", isDirectory: true),
-              let text = try? String(contentsOf: group.appendingPathComponent("diagnostic.log"), encoding: .utf8)
+              let data = try? Data(contentsOf: group.appendingPathComponent("diagnostic.log"))
         else { return "还没有诊断记录" }
-        return text
+        let tailBytes = 16 * 1024
+        if data.count <= tailBytes {
+            return String(decoding: data, as: UTF8.self)
+        }
+        var slice = data.suffix(tailBytes)
+        if let newline = slice.firstIndex(of: UInt8(ascii: "\n")) {
+            slice = slice[slice.index(after: newline)...]
+        }
+        return "…（仅显示末尾记录）\n" + String(decoding: slice, as: UTF8.self)
     }
 
     static func clear() {
         guard let group = AppGroup.containerURL?.appendingPathComponent("Data", isDirectory: true) else { return }
         try? FileManager.default.removeItem(at: group.appendingPathComponent("diagnostic.log"))
+        try? FileManager.default.removeItem(at: group.appendingPathComponent("diagnostic.log.1"))
     }
 }

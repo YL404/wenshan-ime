@@ -111,7 +111,11 @@ final class KeyboardModel {
     }
 
     /// 键盘出现时把本机偏好应用到规则层，不重建会话。
-    func setMode(_ name: String) { bridge.setMode(name == "english" ? .english : .chinese) }
+    func setMode(_ name: String) {
+        let target: InputMode = name == "english" ? .english : .chinese
+        mode = target
+        bridge.setMode(target == .english ? .english : .chinese)
+    }
     func setCandidatePageSize(_ size: Int) { bridge.setCandidatePageSize(size) }
     func setSpaceRevertsPunctuation(_ enabled: Bool) { bridge.setSpaceRevertsPunctuation(enabled) }
     func setSmartPunctuation(_ enabled: Bool) {
@@ -120,7 +124,14 @@ final class KeyboardModel {
     func setKeyFrames(_ frames: [KeyFrame?]) { bridge.setKeyFrames(frames) }
     func setTouchPoint(_ letter: UInt8, _ point: KeyPoint) { bridge.setTouchPoint(letter, point) }
     func editorDidChange() { bridge.editorDidChange() }
-    func manage(_ text: String, pin: Bool) { bridge.manage(text, pin: pin) }
+
+    @discardableResult
+    func manage(_ text: String, pin: Bool) -> Bool {
+        guard phase == .ready else { return false }
+        let (changed, outcome) = bridge.manage(text, pin: pin)
+        if let outcome { _ = apply(outcome) }
+        return changed
+    }
 
     /// 字母键。中文态 Shift 追加到组合缓冲、按大小写出英文候选；英文态直接插入。
     func type(_ key: String) -> KeyboardOutcome {
@@ -229,6 +240,13 @@ final class KeyboardModel {
     func selectGlobal(_ index: Int) -> KeyboardOutcome {
         guard phase == .ready else { return .idle }
         let outcome = bridge.selectGlobal(index)
+        return outcome.consumed ? apply(outcome) : .idle
+    }
+
+    /// 取全部候选里第 i 个候选的首字或尾字，索引可以落在后续页。
+    func selectCharGlobal(_ index: Int, last: Bool) -> KeyboardOutcome {
+        guard phase == .ready else { return .idle }
+        let outcome = bridge.selectCharGlobal(index, last: last)
         return outcome.consumed ? apply(outcome) : .idle
     }
 

@@ -75,8 +75,6 @@ struct KeyboardMetrics: Equatable {
 /// 系统键盘在浅色下是白键、深色下是深灰键，这里用动态色跟随。
 @MainActor
 enum KeyboardPalette {
-    static var traits = UITraitCollection.current
-
     static let key = UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(white: 0.28, alpha: 1)
@@ -108,7 +106,11 @@ enum KeyboardPalette {
             : UIColor(white: 0.82, alpha: 1)
     }
 
-    static var accent: UIColor { KeyboardSettings.accentColor(traits: traits) }
+    static var accent: UIColor {
+        UIColor { traits in
+            KeyboardSettings.accentColor(traits: traits)
+        }
+    }
 }
 
 /// 按按下顺序执行按键动作。两指快速连打时，后按下的键可能先抬起；
@@ -184,6 +186,8 @@ final class KeyEventQueue {
 /// VC 只接语义回调，不再给单个键挂 gesture recognizer。
 final class KeyButton: UIButton {
     var onTap: (() -> Void)?
+    /// triggersOnPress 为 true 时，按下瞬间触发的动作（如删除键轻点退一格）。
+    var onPress: (() -> Void)?
     /// 返回 true 表示这次长按已被消费，抬起时不再触发 onTap。
     var onLongPress: (() -> Bool)?
     var onRepeat: (() -> Void)?
@@ -308,7 +312,7 @@ final class KeyButton: UIButton {
         onPressChanged?(true)
         if triggersOnPress {
             didRepeat = true
-            onRepeat?()
+            (onPress ?? onRepeat)?()
         }
         startTimers()
         return true
