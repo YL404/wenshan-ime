@@ -57,6 +57,8 @@ final class SymbolPanelView: UIView {
 
     private let header = UIStackView()
     private let grid = TextGridView(minColumns: 5, gridIdentifier: "symbol_panel_grid")
+    private static let symbolFont = UIFont.systemFont(ofSize: 20)
+    private static let longSymbolFont = UIFont.systemFont(ofSize: 13)
     private var categoryButtons: [UIButton] = []
     private var symbols: [String] = []
 
@@ -103,7 +105,7 @@ final class SymbolPanelView: UIView {
 
         grid.style = { index, text in
             TextGridView.Style(
-                font: .systemFont(ofSize: text.count > 3 ? 13 : 20),
+                font: text.count > 3 ? Self.longSymbolFont : Self.symbolFont,
                 inset: 4,
                 accessibilityIdentifier: "symbol_\(index)",
                 accessibilityHint: Self.alternates[text].map { "长按输入 \($0)" })

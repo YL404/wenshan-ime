@@ -332,9 +332,7 @@ final class CandidateCell: PressableCell {
     override init(frame: CGRect) {
         super.init(frame: frame)
         contentView.layer.cornerCurve = .continuous
-        contentView.clipsToBounds = true
-        contentView.backgroundColor = KeyboardPalette.gridCell
-        contentView.layer.cornerRadius = 7
+        contentView.layer.allowsGroupOpacity = false
 
         label.font = .systemFont(ofSize: 20)
         label.textColor = .label
@@ -358,6 +356,8 @@ final class CandidateCell: PressableCell {
         label.text = text
         label.font = isFirst ? .systemFont(ofSize: font.pointSize, weight: .semibold) : font
         label.textColor = isFirst ? KeyboardPalette.accent : .label
+        contentView.backgroundColor = isFirst ? KeyboardPalette.gridCell : .clear
+        contentView.layer.cornerRadius = isFirst ? 7 : 0
         accessibilityIdentifier = "candidate_\(index)"
         accessibilityLabel = text
         accessibilityValue = isFirst ? "首选" : nil
@@ -377,7 +377,10 @@ final class CandidatePanel: UIView {
         set { grid.menuProvider = newValue }
     }
 
-    private let grid = TextGridView(minColumns: 3, gridIdentifier: "candidate_panel_grid")
+    private let grid = TextGridView(
+        minColumns: 3,
+        gridIdentifier: "candidate_panel_grid",
+        adaptsWidthToContent: true)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -386,14 +389,7 @@ final class CandidatePanel: UIView {
         // 不画自己的底板：和字母页/数字页一样露出 UIInputView 的系统键盘材质。
         backgroundColor = .clear
 
-        grid.style = { index, _ in
-            TextGridView.Style(
-                font: .systemFont(ofSize: 17, weight: index == 0 ? .semibold : .regular),
-                inset: 6,
-                accessibilityIdentifier: "candidate_panel_\(index)",
-                accessibilityValue: index == 0 ? "首选" : nil,
-                isFirst: index == 0)
-        }
+        grid.style = makeStyle(font: .systemFont(ofSize: 17))
         addSubview(grid)
         NSLayoutConstraint.activate([
             grid.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -412,14 +408,19 @@ final class CandidatePanel: UIView {
     }
 
     func setFont(_ font: UIFont) {
-        grid.style = { index, _ in
+        grid.style = makeStyle(font: font)
+        grid.reloadStyles()
+    }
+
+    private func makeStyle(font: UIFont) -> (Int, String) -> TextGridView.Style {
+        { index, _ in
             TextGridView.Style(
                 font: .systemFont(ofSize: font.pointSize, weight: index == 0 ? .semibold : .regular),
-                inset: 6,
+                inset: 10,
                 accessibilityIdentifier: "candidate_panel_\(index)",
                 accessibilityValue: index == 0 ? "首选" : nil,
-                isFirst: index == 0)
+                isFirst: index == 0,
+                adjustsFontSizeToFitWidth: true)
         }
-        grid.setItems(grid.itemsSnapshot())
     }
 }
