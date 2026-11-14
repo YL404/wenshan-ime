@@ -879,4 +879,95 @@ final class EngineTests: XCTestCase {
         typeKeys(e2, "dgx")
         XCTAssertEqual(e2.candidates.first?.text, "邓小平")
     }
+
+    /// 高频单字在组句里不能拆散常用两字词；零/极低权重的生僻词仍让位于高频单字。
+    func testComposePrefersWordOverHighFreqSingleChars() {
+        let d = buildDict([
+            Entry(code: "di", text: "地", weight: 8_804_040),
+            Entry(code: "er", text: "而", weight: 5_075_337),
+            Entry(code: "dier", text: "第二", weight: 50_057),
+            Entry(code: "py", text: "平", weight: 1_439_957),
+            Entry(code: "de", text: "的", weight: 76_938_354),
+            Entry(code: "yi", text: "一", weight: 20_000_000),
+            Entry(code: "deyi", text: "得意", weight: 1),
+        ])
+        let e = Engine(dict: d)
+        typeKeys(e, "dierpy")
+        XCTAssertEqual(e.candidates.first?.text, "第二平")
+
+        let e2 = Engine(dict: d)
+        typeKeys(e2, "deyipy")
+        XCTAssertEqual(e2.candidates.first?.text, "的一平")
+    }
+
+    /// 组句末段要展开到第 4、5 位同音备选，并让用户词频把常用末字翻到首位。
+    func testComposeLastSegmentUsesFreqAndExpandsVariants() {
+        let d = buildDict([
+            Entry(code: "dier", text: "第二", weight: 50_057),
+            Entry(code: "py", text: "平", weight: 1_439_957),
+            Entry(code: "py", text: "凭", weight: 221_418),
+            Entry(code: "py", text: "评", weight: 170_396),
+            Entry(code: "py", text: "瓶", weight: 151_362),
+        ])
+        let e = Engine(dict: d)
+        typeKeys(e, "dierpy")
+        XCTAssertTrue(candidateTexts(e.candidates).contains("第二瓶"))
+        XCTAssertEqual(e.candidates.first?.text, "第二平")
+
+        let e2 = Engine(dict: d)
+        e2.setFreq(Freq(counts: ["瓶": 1], pairs: ["二\t瓶": 1]))
+        typeKeys(e2, "dierpy")
+        XCTAssertEqual(e2.candidates.first?.text, "第二瓶")
+    }
+
+    /// 偶数缓冲下短词也应按覆盖编码长度排在两键单字前面。
+    func testEvenBufferShortRankingPrefersLongerCode() {
+        let d = buildDict([
+            Entry(code: "di", text: "地", weight: 8_804_040),
+            Entry(code: "di", text: "第", weight: 2_558_818),
+            Entry(code: "dier", text: "第二", weight: 50_057),
+            Entry(code: "py", text: "平", weight: 1_439_957),
+        ])
+        let e = Engine(dict: d)
+        typeKeys(e, "dierpy")
+        let texts = candidateTexts(e.candidates)
+        let wordIdx = texts.firstIndex(of: "第二") ?? Int.max
+        let charIdx = texts.firstIndex(of: "地") ?? Int.max
+        XCTAssertLessThan(wordIdx, charIdx)
+    }
+
+    /// 先选两字词再补选单字组成三音节时应学入自造词；词库已有整词时不重复入库。
+    func testUserDictLearnsWordPlusSinglePhrase() {
+        let d = buildDict([
+            Entry(code: "dier", text: "第二", weight: 50_057),
+            Entry(code: "py", text: "平", weight: 1_439_957),
+            Entry(code: "py", text: "瓶", weight: 151_362),
+            Entry(code: "diyi", text: "第一", weight: 500_955),
+            Entry(code: "ci", text: "次", weight: 1_000_000),
+            Entry(code: "diyici", text: "第一次", weight: 314_835),
+        ])
+        let u = UserDict(entries: [])
+        let e = Engine(dict: d)
+        e.setUserDict(u)
+
+        typeKeys(e, "dierpy")
+        guard let wIdx = findText(e, "第二") else { return XCTFail("选不到 第二") }
+        XCTAssertTrue(e.select(wIdx).1)
+        guard let cIdx = findText(e, "瓶") else { return XCTFail("选不到 瓶") }
+        XCTAssertTrue(e.select(cIdx).1)
+        XCTAssertEqual(u.count, 1)
+        XCTAssertEqual(u.entries.first?.code, "dierpy")
+        XCTAssertEqual(u.entries.first?.text, "第二瓶")
+
+        e.reset()
+        typeKeys(e, "dierpy")
+        XCTAssertEqual(e.candidates.first?.text, "第二瓶")
+
+        // 词库已有整词时不重复写入自造词表。
+        e.reset()
+        typeKeys(e, "diyici")
+        if let i1 = findText(e, "第一") { _ = e.select(i1) }
+        if let i2 = findText(e, "次") { _ = e.select(i2) }
+        XCTAssertEqual(u.count, 1)
+    }
 }

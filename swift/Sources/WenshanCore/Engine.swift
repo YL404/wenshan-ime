@@ -32,6 +32,11 @@ public final class Engine {
     var picked: [UInt8] = []
     var pickedCode: [UInt8] = []
     var singles = 0
+    /// 整段缓冲分步选词的状态（用于学入「词+字」「字+词」这类三音节自造词）。
+    var sessionText: [UInt8] = []
+    var sessionCode: [UInt8] = []
+    var sessionSteps = 0
+    var sessionValid = true
 
     /// 建立引擎。dict 可以为 nil，此时只做缓冲管理（用于纯按键测试）。
     public init(dict: Dict?) {
@@ -160,6 +165,10 @@ public final class Engine {
             picked.removeAll(keepingCapacity: true)
             pickedCode.removeAll(keepingCapacity: true)
             singles = 0
+            sessionText.removeAll(keepingCapacity: true)
+            sessionCode.removeAll(keepingCapacity: true)
+            sessionSteps = 0
+            sessionValid = true
             englishQuery = false
         }
         buf.append(ch)
@@ -197,6 +206,10 @@ public final class Engine {
         picked.removeAll(keepingCapacity: true)
         pickedCode.removeAll(keepingCapacity: true)
         singles = 0
+        sessionText.removeAll(keepingCapacity: true)
+        sessionCode.removeAll(keepingCapacity: true)
+        sessionSteps = 0
+        sessionValid = true
     }
 
     /// 取出第 i 个候选并把它占用的编码从缓冲里去掉，返回上屏文本。
@@ -238,16 +251,40 @@ public final class Engine {
             picked.removeAll(keepingCapacity: true)
             pickedCode.removeAll(keepingCapacity: true)
         }
+        let stepScalars = text.unicodeScalars
+        let isPureChineseStep = pick == nil
+            && c.codeLen <= buf.count
+            && used % 2 == 0
+            && !stepScalars.isEmpty
+            && stepScalars.count * 2 == used
+            && stepScalars.allSatisfy { $0.value >= 0x80 && $0.properties.isIdeographic }
+        if sessionValid && isPureChineseStep {
+            sessionSteps += 1
+            sessionText.append(contentsOf: text.utf8)
+            sessionCode.append(contentsOf: buf.prefix(used))
+        } else {
+            sessionValid = false
+        }
         buf.removeFirst(used)
         if buf.isEmpty {
             if singles >= 2 && pickedCode.count >= 4 {
                 user?.add(
                     code: String(decoding: pickedCode, as: UTF8.self),
                     text: String(decoding: picked, as: UTF8.self))
+            } else if sessionValid && sessionSteps == 2 && sessionCode.count == 6 {
+                let code = umlautVariant(sessionCode) ?? sessionCode
+                let phrase = String(decoding: sessionText, as: UTF8.self)
+                if !(dict?.containsExact(code, phrase) ?? false) {
+                    user?.add(code: String(decoding: code, as: UTF8.self), text: phrase)
+                }
             }
             picked.removeAll(keepingCapacity: true)
             pickedCode.removeAll(keepingCapacity: true)
             singles = 0
+            sessionText.removeAll(keepingCapacity: true)
+            sessionCode.removeAll(keepingCapacity: true)
+            sessionSteps = 0
+            sessionValid = true
             englishQuery = false
         }
         refresh()

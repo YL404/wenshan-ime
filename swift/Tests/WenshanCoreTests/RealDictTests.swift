@@ -51,6 +51,30 @@ final class RealDictTests: XCTestCase {
         typeKeys(eWof, "wof")
         XCTAssertEqual(eWof.candidates.first?.text, "我方")
 
+        let eDierpy = Engine(dict: d)
+        let uDierpy = UserDict(entries: [])
+        eDierpy.setUserDict(uDierpy)
+        eDierpy.setFreq(Freq())
+        typeKeys(eDierpy, "dierpy")
+        let dierpyTexts = candidateTexts(eDierpy.candidates)
+        XCTAssertEqual(dierpyTexts.first, "第二平")
+        XCTAssertTrue(
+            dierpyTexts.contains("第二瓶"),
+            "dierpy 首页应包含「第二瓶」，实际: \(dierpyTexts)")
+        let dierIdx = dierpyTexts.firstIndex(of: "第二") ?? Int.max
+        let diIdx = dierpyTexts.firstIndex(of: "地") ?? Int.max
+        XCTAssertLessThan(dierIdx, diIdx, "「第二」应排在单字「地」之前: \(dierpyTexts)")
+
+        // 先选「第二」再选「瓶」，下次打 dierpy 应学成自造词并排到首位。
+        XCTAssertTrue(eDierpy.select(dierIdx).1)
+        guard let pingIdx = eDierpy.candidates.firstIndex(where: { $0.text == "瓶" }) else {
+            return XCTFail("剩余缓冲 py 未给出「瓶」: \(candidateTexts(eDierpy.candidates))")
+        }
+        XCTAssertTrue(eDierpy.select(pingIdx).1)
+        eDierpy.reset()
+        typeKeys(eDierpy, "dierpy")
+        XCTAssertEqual(eDierpy.candidates.first?.text, "第二瓶")
+
         let e4 = Engine(dict: d)
         if let eng = loadEnglishDict() { e4.setEnglishDict(eng) }
         let s4 = Session(eng: e4)

@@ -24,13 +24,21 @@ let maxScan = 20_000
 // 否则「级+许」这种高频单字凑出来的东西会压过真正的词「继续」。
 let maxWordSyllables = 8
 let segmentPenalty = 20.0
-let altPerSegment = 3
+/// 单音节段额外惩罚（单位是 log 权重）：单字表权重普遍比词库高出两个数量级，
+/// 防止两个高频单字（「地+而」）在组句时拆散常用两字词（「第二」）。
+let singleCharPenalty = 3.5
+let altPerSegment = 12
+let lastSegmentScan = 24
+let lastSegmentAlts = 5
 /// 组句换字副本折扣，单位是 log 权重。只给最后一段出备选，前面各段锁定
 /// 最优拼法；副本是备选而不是另一条独立句子，不该和主拼法抢同一层。
 let composeVariantPenalty = 8.0
 /// 组句逐段接续的加权，单位是 log 权重。首段接上文末字，后续段接前段末字。
 /// 单次接最大约 composePairBoost，足够在学过后把换字副本翻上来。
 let composePairBoost = 8.0
+/// 组句总得分映射回整型权重时的基准偏移和缩放，保留多段长句与换字副本的相对排序。
+let composeScoreOffset = 100.0
+let composeScoreScale = 10_000.0
 
 public enum DictError: Error, CustomStringConvertible {
     case badHeader
@@ -120,9 +128,9 @@ func candidateScore(_ weight: UInt32, _ codeLen: Int, _ bufLen: Int) -> Int64 {
             return tier << 40 | shifted
         }
     }
-    // 末尾多着一个声母键（奇数缓冲）时，覆盖按键多的短词更具体，排在
-    // 覆盖少的单字前面：打 wofaxmv 时「我发现」不该沉到「握」「窝」后面。
-    if bufLen % 2 == 1 && tier == Int64(tierShort) {
+    // 覆盖按键多的短词更具体，奇偶缓冲都排在覆盖少的单字前面：
+    // 打 wofaxmv 时「我发现」不沉到「握」「窝」后面，打 dierpy 时「第二」不沉到「地」「第」后面。
+    if tier == Int64(tierShort) {
         return tier << 40 | Int64(codeLen) << 32 | Int64(weight)
     }
     return tier << 40 | Int64(weight)
@@ -427,6 +435,25 @@ extension Dict {
         code.withUnsafeBufferPointer { exactWeight(raw, $0) }
     }
 
+    /// 词库里是否已存在编码恰好等于 code、文本等于 text 的真实词条目。
+    func containsExact(_ code: [UInt8], _ text: String) -> Bool {
+        guard n > 0 else { return false }
+        return data.withUnsafeBytes { raw in
+            code.withUnsafeBufferPointer { p in
+                var i = lowerBound(raw, p)
+                while i < n {
+                    guard codeEquals(raw, i, p) else { break }
+                    if !isAuxEntry(raw, i) {
+                        let (off, len) = textRange(raw, i)
+                        if decode(raw, off, len) == text { return true }
+                    }
+                    i += 1
+                }
+                return false
+            }
+        }
+    }
+
     /// 编码恰好等于 code 的前 n 种真实词写法，权重从高到低。
     func exactAlts(_ raw: UnsafeRawBufferPointer, _ code: [UInt8], _ limit: Int) -> [AltText] {
         code.withUnsafeBufferPointer { p in
@@ -471,32 +498,41 @@ extension Dict {
         var lastChar: [String?] = [String?](repeating: nil, count: total + 1)
         /// 到达每个音节边界时选中的段写法，回溯时按边界取回。
         var chosen: [AltText?] = [AltText?](repeating: nil, count: total + 1)
+        /// 到达每个音节边界时前段末字上下文，供末尾段备选重排沿用。
+        var prevLastAt: [String?] = [String?](repeating: nil, count: total + 1)
         var lastFinal = UInt8(0)
         best[0] = 0
 
+        let scanPerEdge = freq == nil ? 1 : altPerSegment
+
         func edge(_ from: Int, _ to: Int, _ code: [UInt8], _ final: UInt8?) {
             guard best[from] != -Double.infinity else { return }
-            let alts = exactAlts(raw, code, altPerSegment)
+            let alts = exactAlts(raw, code, scanPerEdge)
             guard let top = alts.first else { return }
             let previous = from == 0 ? freq?.context : lastChar[from]
             var winner = top
-            var gain = log(Double(top.weight) + 1) + (freq?.segmentBoost(previous, top.text) ?? 0)
-            // 同一段内也按「词频 + 接上文」挑写法，接续能直接改变分段结果。
+            var gain = log(Double(top.weight) + 1)
+                + (freq?.wordLogBoost(top.text) ?? 0)
+                + (freq?.segmentBoost(previous, top.text) ?? 0)
+            // 同一段内按「词库权重 + 用户词频 + 接上文」挑写法，让常用字词和接续改变分段结果。
             for alt in alts.dropFirst() {
                 let g = log(Double(alt.weight) + 1)
+                    + (freq?.wordLogBoost(alt.text) ?? 0)
                     + (freq?.segmentBoost(previous, alt.text) ?? 0)
                 if g > gain {
                     gain = g
                     winner = alt
                 }
             }
-            let s = best[from] + gain - segmentPenalty
+            let charPenalty = (to - from == 1) ? singleCharPenalty : 0.0
+            let s = best[from] + gain - segmentPenalty - charPenalty
             if s > best[to] {
                 best[to] = s
                 prev[to] = from
                 segs[to] = segs[from] + 1
                 chosen[to] = winner
                 lastChar[to] = winner.text.last.map(String.init)
+                prevLastAt[to] = previous
                 if let final { lastFinal = final }
             }
         }
@@ -545,23 +581,40 @@ extension Dict {
         }
 
         // 每段的同音备选：普通段直接取 buf 切片；末尾声母段要补上选中的韵母键。
+        // 前面各段只用 DP 已选定的最优写法；只为最后一段拉取并重排更多同音备选。
         var alts: [[AltText]] = []
         alts.reserveCapacity(ends.count)
-        for k in ends.indices {
+        let lastIdx = ends.count - 1
+        for k in 0..<lastIdx {
+            guard let pick = chosen[ends[k]] else { return [] }
+            alts.append([pick])
+        }
+        do {
             var code: [UInt8]
-            if ends[k] * 2 <= p.count {
-                code = Array(p[(starts[k] * 2)..<(ends[k] * 2)])
+            if ends[lastIdx] * 2 <= p.count {
+                code = Array(p[(starts[lastIdx] * 2)..<(ends[lastIdx] * 2)])
             } else {
-                code = Array(p[(starts[k] * 2)..<p.count])
+                code = Array(p[(starts[lastIdx] * 2)..<p.count])
                 code.append(lastFinal)
             }
-            let a = exactAlts(raw, code, altPerSegment)
+            let a = exactAlts(raw, code, lastSegmentScan)
             if a.isEmpty { return [] }
-            // DP 里被接续选中的写法排到该段首位，其余保持词频顺序。
-            if let pick = chosen[ends[k]] {
-                alts.append([pick] + a.filter { $0.text != pick.text })
+            let previous = prevLastAt[ends[lastIdx]]
+            let ranked = a.sorted { x, y in
+                let sx = log(Double(x.weight) + 1)
+                    + (freq?.wordLogBoost(x.text) ?? 0)
+                    + (freq?.segmentBoost(previous, x.text) ?? 0)
+                let sy = log(Double(y.weight) + 1)
+                    + (freq?.wordLogBoost(y.text) ?? 0)
+                    + (freq?.segmentBoost(previous, y.text) ?? 0)
+                if sx != sy { return sx > sy }
+                return x.weight > y.weight
+            }
+            if let pick = chosen[ends[lastIdx]] {
+                let rest = ranked.filter { $0.text != pick.text }.prefix(lastSegmentAlts - 1)
+                alts.append([pick] + rest)
             } else {
-                alts.append(a)
+                alts.append(Array(ranked.prefix(lastSegmentAlts)))
             }
         }
 
@@ -577,9 +630,8 @@ extension Dict {
             // 换字副本比主拼法轻一档：段内选择已经在 DP 里按词频和接续定好，
             // 副本只作为可选的次选，不另造一条同分段句子。
             let variant = override >= 0 ? composeVariantPenalty : 0.0
-            // 折算回「单个词」的权重量级，方便和同层候选排序；组句单列一层，
-            // 词库里真实存在的整段词始终排在它前面。
-            let w = exp(sum - segmentPenalty * Double(ends.count) + segmentPenalty - variant) - 1
+            let logScore = sum - segmentPenalty * Double(ends.count) + segmentPenalty - variant
+            let w = (logScore + composeScoreOffset) * composeScoreScale
             let text = String(decoding: bytes, as: UTF8.self)
             let score = (Int64(tierCompose) << 40 | Int64(clampWeight(w))) + (freq?.boost(text) ?? 0)
             out = insertCandidate(out, Candidate(text, p.count, score), limit)
@@ -588,10 +640,8 @@ extension Dict {
         // 只为最后一段出同音备选：前面的段换字会一口气刷出整屏同义副本，
         // 把「这个」「输入法」这些真正可选的短词挤到后面。末尾段是用户
         // 正在敲的那一截，换字最可能是想要的，也最不影响已稳定的前文。
-        if let last = ends.indices.last {
-            for alt in alts[last].dropFirst() {
-                emit(last, alt)
-            }
+        for alt in alts[lastIdx].dropFirst() {
+            emit(lastIdx, alt)
         }
         return out
     }
