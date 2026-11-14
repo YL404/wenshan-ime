@@ -37,6 +37,20 @@ final class RealDictTests: XCTestCase {
         typeKeys(e3, "wofaxmv")
         XCTAssertEqual(e3.candidates.first?.text, "我发现这")
 
+        let eYyg = Engine(dict: d)
+        typeKeys(eYyg, "yyg")
+        XCTAssertEqual(eYyg.candidates.first?.text, "应该")
+
+        let eDgx = Engine(dict: d)
+        typeKeys(eDgx, "dgx")
+        XCTAssertTrue(
+            eDgx.candidates.prefix(3).contains { $0.text == "等下" },
+            "dgx 前三名应包含「等下」，实际: \(candidateTexts(eDgx.candidates))")
+
+        let eWof = Engine(dict: d)
+        typeKeys(eWof, "wof")
+        XCTAssertEqual(eWof.candidates.first?.text, "我方")
+
         let e4 = Engine(dict: d)
         if let eng = loadEnglishDict() { e4.setEnglishDict(eng) }
         let s4 = Session(eng: e4)

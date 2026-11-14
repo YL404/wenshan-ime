@@ -77,21 +77,29 @@ struct AltText {
     var weight: UInt32
 }
 
-// 候选分五层：编码刚好用完缓冲的最优先（打 ni 给「你」，打 nihk 给「你好」），
-// 其次是组句拼出来的整句，再次是还没打完的长词，最后是用掉前几个键的短词。
+// 候选分六层：编码刚好用完缓冲的最优先（打 ni 给「你」，打 nihk 给「你好」），
+// 其次是组句拼出来的整句，再次是还没打完的真实长词，然后是单字辅码，
+// 最后是用掉前几个键的短词。
 // 组句不是词库里的词，单列一层，免得它按合成权重压过同编码的真实词。
+// 辅码单字不是词组，单列在真实长词之后、两键短匹配之前，免得高频单字（yyg「应」）
+// 在三键简拼时抢走两字词（yygl「应该」）的首位。
 // 层号放在高位，层内按词频排。tierTypo 留给纠错候选，永远在正常候选之后。
 let tierTypo = 0
 let tierShort = 1
-let tierLong = 2
-let tierCompose = 3
-let tierExact = 4
+let tierAux = 2
+let tierLong = 3
+let tierCompose = 4
+let tierExact = 5
 /// 英文候选独占一层：精确命中整串时，若中文有整段真词则排其后，否则直排首位；
 /// 前缀补全追加在正常候选末尾。
 /// 用层号把它们和组句、词库真词隔离开，位置由 Engine 单独安插。
-let tierEnglishExact = 5
+let tierEnglishExact = 6
 let tierEnglishPrefix = 1
 let tierEnglishRaw = 0
+
+/// 每多一个未打完的整音节，长词前缀的词表权重右移的位数（除以 8）。
+/// 让三键简拼时两字词不被更长的多字词淹没，同时保留高频三字词与用户词频加权。
+let longExtraSyllableShift = 3
 
 /// 英文候选的分数：层号占高位，权重只决定同层内的顺序。
 @inline(__always)
@@ -106,6 +114,11 @@ func candidateScore(_ weight: UInt32, _ codeLen: Int, _ bufLen: Int) -> Int64 {
         tier = Int64(tierExact)
     } else if codeLen > bufLen {
         tier = Int64(tierLong)
+        let extraSyllables = (codeLen - bufLen) / 2
+        if extraSyllables > 0 {
+            let shifted = Int64(weight) >> min(32, extraSyllables * longExtraSyllableShift)
+            return tier << 40 | shifted
+        }
     }
     // 末尾多着一个声母键（奇数缓冲）时，覆盖按键多的短词更具体，排在
     // 覆盖少的单字前面：打 wofaxmv 时「我发现」不该沉到「握」「窝」后面。
@@ -116,11 +129,11 @@ func candidateScore(_ weight: UInt32, _ codeLen: Int, _ bufLen: Int) -> Int64 {
 }
 
 /// 词表条目的分数。三键编码只可能来自单字辅码（词的编码都是偶数），它不是
-/// 一个打完的词，按「词还没打完」处理，让真实词组按词频和它竞争。
+/// 一个打完的词，降到辅码层让真实词组优先。
 @inline(__always)
 func lookupScore(_ weight: UInt32, _ codeLen: Int, _ bufLen: Int) -> Int64 {
     if codeLen == 3 && bufLen == 3 {
-        return Int64(tierLong) << 40 | Int64(weight)
+        return Int64(tierAux) << 40 | Int64(weight)
     }
     return candidateScore(weight, codeLen, bufLen)
 }
@@ -342,13 +355,17 @@ extension Dict {
             return best
         }
         let (off, len) = textRange(raw, i)
-        // 辅码单字是「单字加部首码」，不是词。四键辅码会和二字词编码撞在一起，
-        // 整段匹配时不能按词频压过真词，把它降到「还没打完的词」那一层；
-        // 短匹配和前缀匹配本来就在那一层，保持不变。
+        // 辅码单字是「单字加部首码」，不是词。无论是三键前缀还是四键撞码，
+        // 都不应按单字词频压过真实词组，统一放到 tierAux（高于普通两键短匹配）；
+        // 若已打超它的编码长度（tierShort），也保持在常规权重，不抢短词的字节长度加成。
         let aux = codeLen > 2 && runeCount(raw, off, len) == 1
-        let adjusted = aux && codeLen == bufLen
-            ? (Int64(tierLong) << 40 | Int64(weight(raw, i)))
-            : base
+        let adjusted: Int64
+        if aux {
+            let auxTier = codeLen >= bufLen ? Int64(tierAux) : Int64(tierShort)
+            adjusted = auxTier << 40 | Int64(weight(raw, i))
+        } else {
+            adjusted = base
+        }
         let score = adjusted + (f?.boost(raw, off, len) ?? 0)
         if !admits(best, limit, score, codeLen) {
             return best

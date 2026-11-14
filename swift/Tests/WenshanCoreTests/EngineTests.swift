@@ -264,8 +264,8 @@ final class EngineTests: XCTestCase {
         }
     }
 
-    /// 三键既可能是单字辅码，也可能是下一个音节的声母。真实词组要按词频排在
-    /// 生僻的辅码单字前面，但高频字（的）仍然能靠权重留在首位。
+    /// 三键既可能是单字辅码，也可能是下一个音节的声母。2+1 / 2+2 单字辅码
+    /// 无论权重多高，都要让位于真实词组；但仍排在普通两键同音字前面。
     func testAuxDoesNotOutrankWord() {
         let d = buildDict([
             Entry(code: "tm", text: "天", weight: 6_000_000),
@@ -280,13 +280,24 @@ final class EngineTests: XCTestCase {
             Entry(code: "deb", text: "的", weight: 76_000_000),
             Entry(code: "debu", text: "的", weight: 76_000_000),
             Entry(code: "debu", text: "底部", weight: 149_000),
+            Entry(code: "yy", text: "应", weight: 1_777_404),
+            Entry(code: "yy", text: "影", weight: 800_000),
+            Entry(code: "yyg", text: "应", weight: 1_777_404),
+            Entry(code: "yyga", text: "应", weight: 1_777_404),
+            Entry(code: "yygl", text: "应该", weight: 501_106),
         ])
         let e = Engine(dict: d)
-        for (code, want) in [("tmj", "添加"), ("xmz", "现在"), ("deb", "的")] {
+        for (code, want) in [("tmj", "添加"), ("xmz", "现在"), ("deb", "底部"), ("yyg", "应该")] {
             e.reset()
             typeKeys(e, code)
             XCTAssertEqual(e.candidates.first?.text, want, "\(code) 候选")
         }
+        e.reset()
+        typeKeys(e, "yyg")
+        let texts = candidateTexts(e.candidates)
+        let auxIdx = texts.firstIndex(of: "应") ?? Int.max
+        let shortIdx = texts.firstIndex(of: "影") ?? Int.max
+        XCTAssertLessThan(auxIdx, shortIdx)
     }
 
     /// 单键候选只取两键单字，辅码条目不能把同一个字重复塞进简码表。
@@ -846,5 +857,26 @@ final class EngineTests: XCTestCase {
         e.setFreq(f)
         typeKeys(e, "woxihrbmig")
         XCTAssertEqual(e.candidates.first?.text, "我喜欢编程")
+    }
+
+    /// 三键简拼前缀优先按接近两字词的编码长度排序，避免更长的多字词把两字词压后；
+    /// 用户频繁选中的长词仍能靠词频加权翻回首位。
+    func testLongPrefixPrefersCloserWordLength() {
+        let d = buildDict([
+            Entry(code: "dgxw", text: "等下", weight: 23_550),
+            Entry(code: "dgxyui", text: "等形式", weight: 137_060),
+            Entry(code: "dgxcpy", text: "邓小平", weight: 155_420),
+            Entry(code: "dgxcpylilp", text: "邓小平理论", weight: 251_575),
+        ])
+        let e = Engine(dict: d)
+        typeKeys(e, "dgx")
+        XCTAssertEqual(e.candidates.first?.text, "等下")
+        XCTAssertEqual(candidateTexts(e.candidates), ["等下", "邓小平", "等形式", "邓小平理论"])
+
+        let f = Freq(counts: ["邓小平": 2])
+        let e2 = Engine(dict: d)
+        e2.setFreq(f)
+        typeKeys(e2, "dgx")
+        XCTAssertEqual(e2.candidates.first?.text, "邓小平")
     }
 }
