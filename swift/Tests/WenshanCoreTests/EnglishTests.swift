@@ -160,6 +160,64 @@ final class EnglishCandidateTests: XCTestCase {
         XCTAssertEqual(s.candidates.first?.text, "macOS")
     }
 
+    /// 中文只命中前缀、辅码单字、组句拼接或纠错时，全小写精确英文词直接排首位。
+    func testExactLowercaseEnglishBeatsNonExactChinese() {
+        // 1. 仅前缀命中（world -> wo「我」为短匹配）
+        let ePrefix = engine(
+            [Entry(code: "wo", text: "我", weight: 5000)],
+            [EnglishEntry(code: "world", display: "world", weight: 100)])
+        typeEnglish(ePrefix, "world")
+        XCTAssertEqual(ePrefix.candidates.map(\.text), ["world", "我"])
+
+        // 2. 仅单字辅码命中（what -> wh「王」辅码降为 tierLong）
+        let eAux = engine(
+            [
+                Entry(code: "what", text: "王", weight: 5000),
+                Entry(code: "wh", text: "望", weight: 3000),
+            ],
+            [EnglishEntry(code: "what", display: "what", weight: 100)])
+        typeEnglish(eAux, "what")
+        XCTAssertEqual(eAux.candidates.first?.text, "what")
+        XCTAssertTrue(eAux.candidates.contains { $0.text == "王" })
+
+        // 3. 仅组句拼接命中（hello -> 和 + 来 + 哦，不是词库整词）
+        let eCompose = engine(
+            [
+                Entry(code: "he", text: "和", weight: 5000),
+                Entry(code: "la", text: "来", weight: 5000),
+                Entry(code: "ll", text: "来", weight: 5000),
+                Entry(code: "oo", text: "哦", weight: 5000),
+            ],
+            [EnglishEntry(code: "hello", display: "hello", weight: 100)])
+        typeEnglish(eCompose, "hello")
+        XCTAssertEqual(eCompose.candidates.first?.text, "hello")
+        XCTAssertTrue(eCompose.candidates.contains { $0.text == "和来哦" })
+
+        // 4. 仅纠错命中（ok -> neighbor 纠错出「老」）
+        let eTypo = engine(
+            [Entry(code: "ol", text: "老", weight: 5000)],
+            [EnglishEntry(code: "ok", display: "OK", weight: 100)])
+        typeEnglish(eTypo, "ok")
+        XCTAssertEqual(eTypo.candidates.map(\.text), ["OK", "老"])
+    }
+
+    /// 用户主动按 Shift 打出大写字母时，即使同拼写存在中文真词，英文仍排首位。
+    func testShiftUppercaseEnglishBeatsChineseExact() {
+        let e = engine(
+            [Entry(code: "name", text: "那么", weight: 9000)],
+            [EnglishEntry(code: "name", display: "name", weight: 100)])
+        let s = Session(eng: e)
+        _ = s.shiftLetter(UInt8(ascii: "N"))
+        typeKeys(s, "ame")
+        XCTAssertEqual(s.candidates.first?.text, "Name")
+
+        // 同编码全小写仍保持中文整词在首位。
+        _ = s.escape()
+        typeKeys(s, "name")
+        XCTAssertEqual(s.candidates.first?.text, "那么")
+        XCTAssertEqual(s.candidates.dropFirst().first?.text, "name")
+    }
+
     /// 退格删空或选词上屏后，englishRun 必须复位，后续大写键按普通拼音处理。
     func testEnglishRunResetsAfterBackspaceAndSelect() {
         let e = engine(

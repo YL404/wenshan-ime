@@ -43,6 +43,23 @@ final class RealDictTests: XCTestCase {
         _ = s4.shiftLetter(UInt8(ascii: "B"))
         typeKeys(s4, "vj")
         XCTAssertEqual(s4.candidates.first?.text, "B 站")
+
+        if let eng = loadEnglishDict() {
+            for word in ["what", "hello", "world", "string"] {
+                let e = Engine(dict: d)
+                e.setEnglishDict(eng)
+                let s = Session(eng: e)
+                typeKeys(s, word)
+                XCTAssertEqual(s.candidates.first?.text, word, "期望 \(word) 排在首位")
+            }
+            for (code, expected) in [("haha", "哈哈"), ("name", "那么"), ("ai", "爱")] {
+                let e = Engine(dict: d)
+                e.setEnglishDict(eng)
+                let s = Session(eng: e)
+                typeKeys(s, code)
+                XCTAssertEqual(s.candidates.first?.text, expected, "期望中文真词 \(expected) 保持首位")
+            }
+        }
     }
 
     /// 只打印耗时，不做断言；release 下跑更接近实际。

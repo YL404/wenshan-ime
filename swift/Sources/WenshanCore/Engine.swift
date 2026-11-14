@@ -282,7 +282,7 @@ public final class Engine {
         if let alt = umlautVariant(buf) {
             normal = collect(alt, limit, normal)
         }
-        let directFullMatch = (normal.first?.score ?? 0) >> 40 >= Int64(tierCompose)
+        let directExactMatch = (normal.first?.score ?? 0) >> 40 >= Int64(tierExact)
         normal = mergeCandidates(normal, mixedCandidates(buf, limit), limit)
         self.limit = limit
         exhausted = normal.count < limit
@@ -290,17 +290,18 @@ public final class Engine {
             normal.append(contentsOf: corrections(buf, normal))
         }
         stream = englishCandidates(
-            normal, includeTail: exhausted, directFullMatch: directFullMatch)
+            normal, includeTail: exhausted, directExactMatch: directExactMatch)
         if page * pageSize < stream.count {
             setPage(page)
         }
     }
 
-    /// 英文候选的安插规则：精确命中整串的英文词放到中文首选之后（第 2 位），
-    /// 只匹配到前缀的补全词追加到候选末尾；两者都不命中时给一条原文兜底。
+    /// 英文候选的安插规则：精确命中整串的英文词在中文也有整段真词（tierExact）
+    /// 且全小写输入时放在第 2 位；若中文只是前缀、辅码单字、组句拼接、纠错、混输
+    /// 或用户输入了大写，英文精确词直接放首位。前缀补全追加在末尾，都不命中时给原文兜底。
     /// 大小写由预编辑串推导，词库里的 display 只作为基准形态。
     func englishCandidates(
-        _ normal: [Candidate], includeTail: Bool, directFullMatch: Bool
+        _ normal: [Candidate], includeTail: Bool, directExactMatch: Bool
     ) -> [Candidate] {
         guard let english, englishQuery, !buf.isEmpty else { return normal }
         let lower = Array(String(decoding: buf, as: UTF8.self).lowercased().utf8)
@@ -323,10 +324,9 @@ public final class Engine {
             return out
         }
         let hasUppercase = buf.contains { $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z") }
-        // 用户主动按了 Shift（含驼峰词）且中文只命中了半截前缀时，英文精确词应排首位；
-        // 混输合成词也不挡精确英文词（例如 Fan 不该被 F 安抢首位）；
-        // 普通全小写输入保持中文首选在第一，免得英文短词抢空格。
-        var at = (hasUppercase && !directFullMatch) ? 0 : min(1, out.count)
+        // 中文没有命中整段真词（仅前缀/辅码单字/组句拼接/纠错/混输），或用户主动按了 Shift，
+        // 精确英文词直接排首位；中文整段真词（如「你」「哈哈」「那么」）在全小写下保持首位。
+        var at = (hasUppercase || !directExactMatch) ? 0 : min(1, out.count)
         var shown = Set<String>()
         for m in exact {
             let text = englishDisplay(m.display)

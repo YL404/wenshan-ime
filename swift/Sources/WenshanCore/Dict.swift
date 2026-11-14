@@ -86,7 +86,8 @@ let tierShort = 1
 let tierLong = 2
 let tierCompose = 3
 let tierExact = 4
-/// 英文候选独占一层：精确命中排在中文首选之后，前缀补全追加在正常候选末尾。
+/// 英文候选独占一层：精确命中整串时，若中文有整段真词则排其后，否则直排首位；
+/// 前缀补全追加在正常候选末尾。
 /// 用层号把它们和组句、词库真词隔离开，位置由 Engine 单独安插。
 let tierEnglishExact = 5
 let tierEnglishPrefix = 1
