@@ -147,22 +147,30 @@ final class CandidateBar: UIView {
     var onSelect: ((Int) -> Void)?
     var onSelectChar: ((Int, Bool) -> Void)?
     var onManage: ((Int, Bool) -> Void)?
+    var onLoadMore: ((Int) -> (items: [String], hasMore: Bool))?
     var onExpand: (() -> Void)?
     var onDismiss: (() -> Void)?
 
-    private let collectionView: UICollectionView
+    private let collectionView: CandidateCollectionView
     private let layout = UICollectionViewFlowLayout()
     private let expandButton = UIButton(type: .system)
     private let dismissButton = UIButton(type: .system)
     private let emptyLabel = UILabel()
+    private var baseCandidates: [String] = []
+    private var baseHasMore = false
     private var candidates: [String] = []
+    private var cachedWidths: [CGFloat] = []
+    private var hasMoreCandidates = false
+    private var isLoadingMore = false
+    private var laidOutSize: CGSize = .zero
     var font = UIFont.systemFont(ofSize: 20)
 
     override init(frame: CGRect) {
         layout.scrollDirection = .horizontal
-        layout.minimumInteritemSpacing = 2
-        layout.minimumLineSpacing = 0
-        collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        layout.minimumInteritemSpacing = 0
+        layout.minimumLineSpacing = 2
+        layout.sectionInset = UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 4)
+        collectionView = CandidateCollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: frame)
 
         translatesAutoresizingMaskIntoConstraints = false
@@ -170,9 +178,13 @@ final class CandidateBar: UIView {
 
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.backgroundColor = .clear
+        collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.delaysContentTouches = false
+        collectionView.canCancelContentTouches = true
         collectionView.showsHorizontalScrollIndicator = false
         collectionView.alwaysBounceHorizontal = true
-        collectionView.contentInset = UIEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
+        collectionView.alwaysBounceVertical = false
+        collectionView.contentInset = .zero
         // 候选条只有一行高，默认 edge effect 会盖住整行候选文字。
         collectionView.topEdgeEffect.isHidden = true
         collectionView.bottomEdgeEffect.isHidden = true
@@ -232,25 +244,42 @@ final class CandidateBar: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func setCandidates(_ candidates: [String]) {
-        let changed = candidates != self.candidates
-        self.candidates = candidates
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let size = collectionView.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        if abs(size.width - laidOutSize.width) > 0.5 || abs(size.height - laidOutSize.height) > 0.5 {
+            laidOutSize = size
+            layout.invalidateLayout()
+            collectionView.layoutIfNeeded()
+        }
+        loadMoreIfNeeded()
+    }
+
+    func setCandidates(_ candidates: [String], hasMore: Bool = false, force: Bool = false) {
+        let changed = force || candidates != baseCandidates || hasMore != baseHasMore
+        baseCandidates = candidates
+        baseHasMore = hasMore
         collectionView.isHidden = candidates.isEmpty
         emptyLabel.isHidden = !candidates.isEmpty
         expandButton.isEnabled = !candidates.isEmpty
         expandButton.alpha = candidates.isEmpty ? 0.4 : 1
-        if changed {
-            collectionView.reloadData()
-            collectionView.collectionViewLayout.invalidateLayout()
-            collectionView.layoutIfNeeded()
-            if !candidates.isEmpty {
-                collectionView.setContentOffset(.zero, animated: false)
-            }
+        guard changed else { return }
+        self.candidates = candidates
+        hasMoreCandidates = hasMore
+        cachedWidths = candidates.map(measureWidth)
+        collectionView.reloadData()
+        if !candidates.isEmpty {
+            collectionView.setContentOffset(.zero, animated: false)
         }
+        collectionView.layoutIfNeeded()
+        loadMoreIfNeeded()
     }
 
     func setCandidateFont(_ font: UIFont) {
+        guard font != self.font else { return }
         self.font = font
+        cachedWidths = candidates.map(measureWidth)
         collectionView.reloadData()
         collectionView.collectionViewLayout.invalidateLayout()
     }
@@ -261,6 +290,61 @@ final class CandidateBar: UIView {
         config?.image = toolbarIcon(name)
         expandButton.configuration = config
         expandButton.accessibilityLabel = expanded ? "收起全部候选" : "展开全部候选"
+    }
+
+    func candidate(at index: Int) -> String? {
+        candidates.indices.contains(index) ? candidates[index] : nil
+    }
+
+    /// 顶栏外缘（上方/左侧几像素留白）的拖动转发给候选条本身，避免边缘滑不动或误触选词。
+    func edgeScrollTarget(for point: CGPoint) -> UIView? {
+        guard !isHidden, !collectionView.isHidden, collectionView.bounds.width > 0 else { return nil }
+        let maxX = collectionView.frame.maxX + 4
+        guard point.x >= -10, point.x <= maxX,
+              point.y >= -10, point.y <= bounds.height + 4,
+              !expandButton.frame.insetBy(dx: -2, dy: -4).contains(point),
+              !dismissButton.frame.contains(point)
+        else { return nil }
+        return collectionView
+    }
+
+    private func measureWidth(for text: String) -> CGFloat {
+        let width = (text as NSString).size(withAttributes: [.font: font]).width + 22
+        return max(44, ceil(width))
+    }
+
+    private func loadMoreIfNeeded() {
+        guard hasMoreCandidates,
+              !isLoadingMore,
+              !candidates.isEmpty,
+              collectionView.bounds.width > 0,
+              let onLoadMore
+        else { return }
+
+        let visibleRight = collectionView.contentOffset.x + collectionView.bounds.width
+        var contentWidth = collectionView.collectionViewLayout.collectionViewContentSize.width
+        guard visibleRight >= contentWidth - 180 else { return }
+
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+
+        let start = candidates.count
+        for _ in 0..<4 {
+            guard hasMoreCandidates, visibleRight >= contentWidth - 180 else { break }
+            let batch = onLoadMore(candidates.count)
+            hasMoreCandidates = batch.hasMore
+            guard batch.items.count > candidates.count else { break }
+            let appended = Array(batch.items[candidates.count...])
+            let widths = appended.map(measureWidth)
+            candidates.append(contentsOf: appended)
+            cachedWidths.append(contentsOf: widths)
+            contentWidth += widths.reduce(0, +) + CGFloat(widths.count) * layout.minimumLineSpacing
+        }
+        guard candidates.count > start else { return }
+        let indexPaths = (start..<candidates.count).map { IndexPath(item: $0, section: 0) }
+        UIView.performWithoutAnimation {
+            collectionView.insertItems(at: indexPaths)
+        }
     }
 }
 
@@ -288,10 +372,15 @@ extension CandidateBar: UICollectionViewDataSource, UICollectionViewDelegateFlow
         layout collectionViewLayout: UICollectionViewLayout,
         sizeForItemAt indexPath: IndexPath
     ) -> CGSize {
-        let text = candidates[indexPath.item] as NSString
-        let width = text.size(withAttributes: [.font: font]).width + 22
-        let height = max(30, min(36, collectionView.bounds.height - 4))
-        return CGSize(width: max(44, ceil(width)), height: height)
+        let width = cachedWidths.indices.contains(indexPath.item)
+            ? cachedWidths[indexPath.item]
+            : measureWidth(for: candidates[indexPath.item])
+        let height = collectionView.bounds.height > 0 ? floor(collectionView.bounds.height) : 36
+        return CGSize(width: width, height: max(30, height))
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        loadMoreIfNeeded()
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -324,40 +413,54 @@ extension CandidateBar: UICollectionViewDataSource, UICollectionViewDelegateFlow
     }
 }
 
+private final class CandidateCollectionView: UICollectionView {
+    override func touchesShouldCancel(in view: UIView) -> Bool {
+        true
+    }
+}
+
 final class CandidateCell: PressableCell {
     static let reuseID = "candidate"
 
+    private let pillView = UIView()
     private let label = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        contentView.layer.cornerCurve = .continuous
+        contentView.backgroundColor = .clear
         contentView.layer.allowsGroupOpacity = false
+
+        pillView.backgroundColor = KeyboardPalette.gridCell
+        pillView.layer.cornerRadius = 7
+        pillView.layer.cornerCurve = .continuous
+        pillView.isUserInteractionEnabled = false
+        pillView.isHidden = true
+        contentView.addSubview(pillView)
 
         label.font = .systemFont(ofSize: 20)
         label.textColor = .label
         label.textAlignment = .center
         label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 11),
-            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -11),
-            label.topAnchor.constraint(equalTo: contentView.topAnchor),
-            label.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-        ])
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let bounds = contentView.bounds
+        let verticalInset = max(2, floor((bounds.height - 36) / 2))
+        pillView.frame = bounds.insetBy(dx: 0, dy: verticalInset)
+        label.frame = bounds.insetBy(dx: 11, dy: 0)
+    }
+
     func configure(text: String, index: Int, font: UIFont, isFirst: Bool) {
         label.text = text
         label.font = isFirst ? .systemFont(ofSize: font.pointSize, weight: .semibold) : font
         label.textColor = isFirst ? KeyboardPalette.accent : .label
-        contentView.backgroundColor = isFirst ? KeyboardPalette.gridCell : .clear
-        contentView.layer.cornerRadius = isFirst ? 7 : 0
+        pillView.isHidden = !isFirst
         accessibilityIdentifier = "candidate_\(index)"
         accessibilityLabel = text
         accessibilityValue = isFirst ? "首选" : nil

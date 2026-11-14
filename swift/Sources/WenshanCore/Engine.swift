@@ -534,9 +534,18 @@ public final class Engine {
 
     /// 流里的全部候选（最多 maxPages 页），供键盘一次展开。它只补建流，不改变当前页。
     public func allCandidates() -> [Candidate] {
-        if stream.isEmpty { return [] }
-        ensure(maxPages * pageSize)
-        return Array(stream[..<min(maxPages * pageSize, stream.count)])
+        candidates(upTo: maxPages * pageSize).items
+    }
+
+    /// 返回流里前 count 个候选（不超过 maxPages * pageSize）及是否还有更多，只补建流不改当前页。
+    public func candidates(upTo count: Int) -> (items: [Candidate], hasMore: Bool) {
+        if stream.isEmpty || count <= 0 { return ([], false) }
+        let cap = min(count, maxPages * pageSize)
+        let probe = cap < maxPages * pageSize ? cap + 1 : cap
+        ensure(probe)
+        let items = Array(stream[..<min(cap, stream.count)])
+        let hasMore = cap < maxPages * pageSize && stream.count > cap
+        return (items, hasMore)
     }
 
     /// 选出流里的第 i 个候选，索引可以落在后续页。

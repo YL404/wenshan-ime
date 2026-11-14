@@ -203,6 +203,27 @@ final class EngineTests: XCTestCase {
         XCTAssertTrue(e.candidates.isEmpty)
     }
 
+    func testCandidatesUpToKeepsCurrentPage() {
+        var entries: [Entry] = []
+        for i in 0..<25 {
+            entries.append(Entry(code: "ni", text: asciiLetter(i), weight: UInt32(2500 - i)))
+        }
+        let e = Engine(dict: buildDict(entries))
+        typeKeys(e, "ni")
+
+        let firstBatch = e.candidates(upTo: 12)
+        XCTAssertEqual(firstBatch.items.count, 12)
+        XCTAssertTrue(firstBatch.hasMore)
+        XCTAssertEqual(firstBatch.items[0].text, "a")
+        XCTAssertEqual(firstBatch.items[11].text, "l")
+        XCTAssertEqual(e.candidates.count, pageSize)
+        XCTAssertEqual(e.pageNo, 0)
+
+        let fullBatch = e.candidates(upTo: 30)
+        XCTAssertEqual(fullBatch.items.count, 25)
+        XCTAssertFalse(fullBatch.hasMore)
+    }
+
     func testPagingSinglePage() {
         var entries: [Entry] = []
         for i in 0..<pageSize {

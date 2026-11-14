@@ -12,6 +12,8 @@ struct BridgeOutcome: Equatable {
     var preedit: String
     /// 当前页候选。
     var candidates: [String]
+    /// 后续页是否还有更多候选。
+    var hasNextPage: Bool
     /// false 表示规则层没消费这个键，Swift 侧按原键处理。
     var consumed: Bool
     var isEnglish: Bool
@@ -36,7 +38,7 @@ final class WenshanBridge {
     private var lastResult: Result?
 
     private static let empty = BridgeOutcome(
-        text: "", preedit: "", candidates: [], consumed: false, isEnglish: false,
+        text: "", preedit: "", candidates: [], hasNextPage: false, consumed: false, isEnglish: false,
         fullWidth: true, deleteBefore: 0, caretOffset: 0)
 
     /// 打开扩展 Bundle 里的词表并建立引擎。词表跟着扩展一起安装和更新，
@@ -188,6 +190,12 @@ final class WenshanBridge {
         return session?.allCandidates.map(\.text) ?? []
     }
 
+    func candidates(upTo count: Int) -> (items: [String], hasMore: Bool) {
+        guard let session else { return ([], false) }
+        let batch = session.candidates(upTo: count)
+        return (batch.items.map(\.text), batch.hasMore)
+    }
+
     /// 执行一次规则动作。可能上屏或补空格的动作先把最新正文推给规则层。
     /// 词表还没打开时当作没消费。
     private func call(syncContext: Bool = true, _ action: (Session) -> Result) -> BridgeOutcome {
@@ -221,6 +229,7 @@ final class WenshanBridge {
             text: info?.text ?? "",
             preedit: session.preedit,
             candidates: session.candidates.map(\.text),
+            hasNextPage: session.hasNextPage,
             consumed: info?.consumed ?? false,
             isEnglish: session.currentMode == .english,
             fullWidth: session.isFullWidth,

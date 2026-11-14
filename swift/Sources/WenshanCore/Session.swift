@@ -131,6 +131,11 @@ public final class Session {
     /// 是否还有下一页候选，供候选窗显示「还有更多 / 到底」。
     public var hasNextPage: Bool { eng?.hasNextPage() ?? false }
 
+    /// 按需取前 count 个候选及是否还有更多，不改变当前页，供键盘候选条滑动续载。
+    public func candidates(upTo count: Int) -> (items: [Candidate], hasMore: Bool) {
+        eng?.candidates(upTo: count) ?? ([], false)
+    }
+
     /// 第 1 页和后续页的全部候选，供键盘展开显示。
     public var allCandidates: [Candidate] { eng?.allCandidates() ?? [] }
 

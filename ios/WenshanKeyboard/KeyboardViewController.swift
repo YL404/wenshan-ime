@@ -42,8 +42,11 @@ final class KeyboardViewController: UIInputViewController {
 
     override func loadView() {
         // 原生皮肤：键盘底板交给 UIInputView 的系统材质，不再画自己的背景。
-        let inputView = UIInputView(frame: .zero, inputViewStyle: .keyboard)
+        let inputView = KeyboardInputView(frame: .zero, inputViewStyle: .keyboard)
         inputView.allowsSelfSizing = false
+        inputView.candidateBar = candidateBar
+        inputView.topBar = topBar
+        inputView.rootView = root
         view = inputView
     }
 
@@ -199,11 +202,14 @@ final class KeyboardViewController: UIInputViewController {
         candidatePanel.setFont(currentCandidateFont())
         candidateBar.onSelect = { [weak self] index in
             guard let self else { return }
-            self.pick(self.model.select(index))
+            self.pick(self.model.selectGlobal(index))
         }
         candidateBar.onSelectChar = { [weak self] index, last in
             guard let self else { return }
-            self.pick(self.model.selectChar(index, last: last))
+            self.pick(self.model.selectCharGlobal(index, last: last))
+        }
+        candidateBar.onLoadMore = { [weak self] currentCount in
+            self?.model.moreCandidates(after: currentCount) ?? ([], false)
         }
         candidateBar.onExpand = { [weak self] in
             self?.toggleCandidatePanel()
@@ -452,7 +458,7 @@ final class KeyboardViewController: UIInputViewController {
     private func manageCandidate(_ index: Int, pin: Bool) {
         let text = overlay == .candidates
             ? (candidatePanelItems.indices.contains(index) ? candidatePanelItems[index] : nil)
-            : (model.candidates.indices.contains(index) ? model.candidates[index] : nil)
+            : candidateBar.candidate(at: index)
         guard let text else { return }
         guard model.manage(text, pin: pin) else { return }
         playSelectionFeedback()
@@ -461,7 +467,7 @@ final class KeyboardViewController: UIInputViewController {
             candidatePanelItems = all
             candidatePanel.setCandidates(all)
         }
-        render()
+        render(forceCandidates: true)
     }
 
     /// 从候选条、全部候选或符号面板选中一项：关面板、触感、上屏。
@@ -546,10 +552,11 @@ final class KeyboardViewController: UIInputViewController {
 
     // MARK: - 渲染
 
-    private func render() {
+    private func render(forceCandidates: Bool = false) {
         writer.setMarkedText(model.isComposing ? model.preedit : "")
         updateTopBar()
-        candidateBar.setCandidates(model.candidates)
+        candidateBar.setCandidates(
+            model.candidates, hasMore: model.hasNextPage, force: forceCandidates)
         updateKeys()
     }
 
@@ -692,5 +699,22 @@ extension KeyboardViewController: KeyRowsHost {
         } else {
             hidePreview(for: key)
         }
+    }
+}
+
+/// 把顶栏外缘几像素留白的触摸转给候选条滚动，不改变视觉边距。
+private final class KeyboardInputView: UIInputView {
+    weak var candidateBar: CandidateBar?
+    weak var topBar: UIView?
+    weak var rootView: UIView?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        if (hit == nil || hit === self || hit === rootView || hit === topBar || hit === candidateBar),
+           let candidateBar,
+           let target = candidateBar.edgeScrollTarget(for: convert(point, to: candidateBar)) {
+            return target
+        }
+        return hit
     }
 }

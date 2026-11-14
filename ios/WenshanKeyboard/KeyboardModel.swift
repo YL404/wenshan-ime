@@ -40,6 +40,7 @@ final class KeyboardModel {
     private(set) var phase: Phase = .failed("词表还没打开")
     private(set) var preedit = ""
     private(set) var candidates: [String] = []
+    private(set) var hasNextPage = false
     private(set) var mode: InputMode = .chinese
     private(set) var shift: ShiftState = .off
     private(set) var fullWidth = true
@@ -47,6 +48,7 @@ final class KeyboardModel {
 
     private let bridge = WenshanBridge()
     private var lastShiftTap: TimeInterval = 0
+    private var pageSize = 9
 
     /// 光标前的正文，由 VC 挂上。规则层判断中英文之间要不要补空格时读它。
     var contextBefore: () -> String {
@@ -116,7 +118,10 @@ final class KeyboardModel {
         mode = target
         bridge.setMode(target == .english ? .english : .chinese)
     }
-    func setCandidatePageSize(_ size: Int) { bridge.setCandidatePageSize(size) }
+    func setCandidatePageSize(_ size: Int) {
+        pageSize = min(max(1, size), 9)
+        bridge.setCandidatePageSize(pageSize)
+    }
     func setSpaceRevertsPunctuation(_ enabled: Bool) { bridge.setSpaceRevertsPunctuation(enabled) }
     func setSmartPunctuation(_ enabled: Bool) {
         bridge.configure(smart: enabled, pair: enabled)
@@ -256,6 +261,12 @@ final class KeyboardModel {
         return bridge.allCandidates()
     }
 
+    /// 候选条横向滚动时按需取后续候选，不改当前页。
+    func moreCandidates(after currentCount: Int) -> (items: [String], hasMore: Bool) {
+        guard phase == .ready, isComposing else { return ([], false) }
+        return bridge.candidates(upTo: currentCount + max(pageSize, 12))
+    }
+
     /// 切换标点全角/半角。切换结果写在规则层，键盘只负责显示。
     func toggleFullWidth() -> KeyboardOutcome {
         guard phase == .ready else { return .handled }
@@ -267,6 +278,7 @@ final class KeyboardModel {
         bridge.reset()
         preedit = ""
         candidates = []
+        hasNextPage = false
         shift = .off
     }
 
@@ -291,6 +303,7 @@ final class KeyboardModel {
     private func apply(_ outcome: BridgeOutcome) -> KeyboardOutcome {
         preedit = outcome.preedit
         candidates = outcome.candidates
+        hasNextPage = outcome.hasNextPage
         mode = outcome.isEnglish ? .english : .chinese
         fullWidth = outcome.fullWidth
         return outcome.text.isEmpty && outcome.deleteBefore == 0 && outcome.caretOffset == 0
