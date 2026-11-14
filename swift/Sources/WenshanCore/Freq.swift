@@ -14,8 +14,11 @@ let boostPerPick: Int64 = 1_000_000
 let maxPairEntries = 20_000
 let maxPairCount: UInt32 = 20
 let boostPerPair: Int64 = 200_000
-/// 组句段内按用户历史词频折算的最大 log 权重，和二元接续保持同一量级。
-let composeFreqBoost = 8.0
+/// 组句 DP 选分段时的用户词频加成上限：必须克制，防止多音字（「的」de/di）的高频记录
+/// 在异读音上带偏整句切分（如把 dierpy 拆成「的+二平」）。
+let composeEdgeFreqBoost = 2.0
+/// 组句锁定分段后，末尾段同音备选重排时的用户词频加成上限。
+let composeLastFreqBoost = 6.0
 
 /// 记录用户实际选过的词，以及「上一个上屏词的末字 → 这个词」的接续，
 /// 用来把常用的词和接在它后面的词往前排。只在主线程访问，不加锁。
@@ -168,9 +171,9 @@ public final class Freq {
     }
 
     /// 组句段内选词时，按用户历史词频折算的 log 权重加成。
-    func wordLogBoost(_ text: String) -> Double {
+    func wordLogBoost(_ text: String, maxBoost: Double = composeEdgeFreqBoost) -> Double {
         let n = min(counts[text] ?? 0, maxBoostCount)
-        return n == 0 ? 0 : composeFreqBoost * log(Double(n) + 1) / log(Double(maxBoostCount) + 1)
+        return n == 0 ? 0 : maxBoost * log(Double(n) + 1) / log(Double(maxBoostCount) + 1)
     }
 
     func pairBoost(_ text: String) -> Int64 {

@@ -602,20 +602,15 @@ extension Dict {
             let previous = prevLastAt[ends[lastIdx]]
             let ranked = a.sorted { x, y in
                 let sx = log(Double(x.weight) + 1)
-                    + (freq?.wordLogBoost(x.text) ?? 0)
+                    + (freq?.wordLogBoost(x.text, maxBoost: composeLastFreqBoost) ?? 0)
                     + (freq?.segmentBoost(previous, x.text) ?? 0)
                 let sy = log(Double(y.weight) + 1)
-                    + (freq?.wordLogBoost(y.text) ?? 0)
+                    + (freq?.wordLogBoost(y.text, maxBoost: composeLastFreqBoost) ?? 0)
                     + (freq?.segmentBoost(previous, y.text) ?? 0)
                 if sx != sy { return sx > sy }
                 return x.weight > y.weight
             }
-            if let pick = chosen[ends[lastIdx]] {
-                let rest = ranked.filter { $0.text != pick.text }.prefix(lastSegmentAlts - 1)
-                alts.append([pick] + rest)
-            } else {
-                alts.append(Array(ranked.prefix(lastSegmentAlts)))
-            }
+            alts.append(Array(ranked.prefix(lastSegmentAlts)))
         }
 
         var out: [Candidate] = []

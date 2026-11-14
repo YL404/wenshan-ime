@@ -920,6 +920,23 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(e2.candidates.first?.text, "第二瓶")
     }
 
+    /// 高频多音字（「的」在 de 上累计高频）不能在异读音 di 上拆散「第二」。
+    func testComposePolyphonicFreqDoesNotHijackSegmentation() {
+        let d = buildDict([
+            Entry(code: "di", text: "地", weight: 8_804_040),
+            Entry(code: "di", text: "的", weight: 106_917),
+            Entry(code: "er", text: "而", weight: 5_075_337),
+            Entry(code: "dier", text: "第二", weight: 50_057),
+            Entry(code: "erpy", text: "二平", weight: 6_560),
+            Entry(code: "py", text: "平", weight: 1_439_957),
+            Entry(code: "py", text: "瓶", weight: 151_362),
+        ])
+        let e = Engine(dict: d)
+        e.setFreq(Freq(counts: ["的": 1577, "瓶": 1], pairs: ["二\t瓶": 1]))
+        typeKeys(e, "dierpy")
+        XCTAssertEqual(e.candidates.first?.text, "第二瓶")
+    }
+
     /// 偶数缓冲下短词也应按覆盖编码长度排在两键单字前面。
     func testEvenBufferShortRankingPrefersLongerCode() {
         let d = buildDict([
