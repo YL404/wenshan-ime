@@ -253,7 +253,7 @@ public final class Session {
     public func backspace() -> Result {
         if mode == .chinese && !buffer.isEmpty {
             _ = eng?.backspace()
-            if buffer.isEmpty { englishRun = false }
+            syncEnglishRun()
             return result("", true)
         }
         lastASCIIDirect = nil
@@ -265,7 +265,7 @@ public final class Session {
     public func backspaceSyllable() -> Result {
         if mode == .chinese && !buffer.isEmpty {
             _ = eng?.backspaceSyllable()
-            if buffer.isEmpty { englishRun = false }
+            syncEnglishRun()
             return result("", true)
         }
         lastASCIIDirect = nil
@@ -317,8 +317,12 @@ public final class Session {
     /// 把引擎选出的文字按补空格规则上屏。
     func selected(_ r: (String, Bool)) -> Result {
         guard r.1 else { return result("", false) }
-        if buffer.isEmpty { englishRun = false }
+        syncEnglishRun()
         return result(commitText("", r.0), true)
+    }
+
+    func syncEnglishRun() {
+        englishRun = eng?.buffer.contains { $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z") } ?? false
     }
 
     /// 把 ASCII 标点转成中文标点。组合中的候选先上屏；全半角关闭或表里

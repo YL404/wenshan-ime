@@ -282,12 +282,15 @@ public final class Engine {
         if let alt = umlautVariant(buf) {
             normal = collect(alt, limit, normal)
         }
+        let directFullMatch = (normal.first?.score ?? 0) >> 40 >= Int64(tierCompose)
+        normal = mergeCandidates(normal, mixedCandidates(buf, limit), limit)
         self.limit = limit
         exhausted = normal.count < limit
         if exhausted {
             normal.append(contentsOf: corrections(buf, normal))
         }
-        stream = englishCandidates(normal, includeTail: exhausted)
+        stream = englishCandidates(
+            normal, includeTail: exhausted, directFullMatch: directFullMatch)
         if page * pageSize < stream.count {
             setPage(page)
         }
@@ -296,7 +299,9 @@ public final class Engine {
     /// 英文候选的安插规则：精确命中整串的英文词放到中文首选之后（第 2 位），
     /// 只匹配到前缀的补全词追加到候选末尾；两者都不命中时给一条原文兜底。
     /// 大小写由预编辑串推导，词库里的 display 只作为基准形态。
-    func englishCandidates(_ normal: [Candidate], includeTail: Bool) -> [Candidate] {
+    func englishCandidates(
+        _ normal: [Candidate], includeTail: Bool, directFullMatch: Bool
+    ) -> [Candidate] {
         guard let english, englishQuery, !buf.isEmpty else { return normal }
         let lower = Array(String(decoding: buf, as: UTF8.self).lowercased().utf8)
         guard lower.count >= englishMinExact,
@@ -318,10 +323,10 @@ public final class Engine {
             return out
         }
         let hasUppercase = buf.contains { $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z") }
-        let topIsFullMatch = (out.first?.score ?? 0) >> 40 >= Int64(tierCompose)
         // 用户主动按了 Shift（含驼峰词）且中文只命中了半截前缀时，英文精确词应排首位；
+        // 混输合成词也不挡精确英文词（例如 Fan 不该被 F 安抢首位）；
         // 普通全小写输入保持中文首选在第一，免得英文短词抢空格。
-        var at = (hasUppercase && !topIsFullMatch) ? 0 : min(1, out.count)
+        var at = (hasUppercase && !directFullMatch) ? 0 : min(1, out.count)
         var shown = Set<String>()
         for m in exact {
             let text = englishDisplay(m.display)
@@ -349,8 +354,10 @@ public final class Engine {
     /// 按预编辑串的大小写推导显示形态：首字母大写 → Title，前两个大写 → ALL CAPS，
     /// 其余保持原样。词库里已带混合大小写的专名（GitHub、MacBook）原样保留。
     func englishDisplay(_ word: String) -> String {
-        let src = String(decoding: buf, as: UTF8.self)
-        let bytes = Array(src.utf8)
+        englishDisplay(word, for: buf)
+    }
+
+    func englishDisplay(_ word: String, for bytes: [UInt8]) -> String {
         let upperCount = bytes.prefix(2).filter {
             $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z")
         }.count
@@ -395,10 +402,7 @@ public final class Engine {
             // 单键：给出这个键开头的最高频词，例如 l → 了。
             cands = mergeCandidates(cands, dict.short(buf[0], freq), limit)
         } else {
-            cands = mergeCandidates(cands, dict.lookup(buf, limit: limit, freq: freq), limit)
-            for c in dict.compose(buf, limit: limit, freq: freq) {
-                cands = insertCandidate(cands, c, limit)
-            }
+            cands = collectDict(buf, limit, cands)
         }
         if let phrases {
             cands = mergeCandidates(cands, phrases.lookup(buf, limit, freq), limit)
@@ -407,6 +411,62 @@ public final class Engine {
             cands = mergeCandidates(cands, user.lookup(buf, limit, freq), limit)
         }
         return cands
+    }
+
+    func collectDict(_ code: [UInt8], _ limit: Int, _ cands: [Candidate]) -> [Candidate] {
+        var cands = cands
+        guard let dict, code.count >= 2 else { return cands }
+        cands = mergeCandidates(cands, dict.lookup(code, limit: limit, freq: freq), limit)
+        for c in dict.compose(code, limit: limit, freq: freq) {
+            cands = insertCandidate(cands, c, limit)
+        }
+        return cands
+    }
+
+    /// 中英混输候选：缓冲里有大写字母（由 Shift 引入）时，把末尾至少两键的纯小写
+    /// 双拼后缀拆出来查中文词和组句，再和前面的单大写字母、全大写缩写或已命中的
+    /// 英文词用空格拼成混排候选。全小写输入不进这条路径，避免干扰双拼简拼和纠错。
+    func mixedCandidates(_ buf: [UInt8], _ limit: Int) -> [Candidate] {
+        guard dict != nil, buf.count >= 3, limit > 0,
+              let lastUpper = buf.lastIndex(where: { $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z") }),
+              lastUpper + 2 < buf.count
+        else { return [] }
+        let tailStart = lastUpper + 1
+        guard buf[tailStart...].allSatisfy({ $0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z") })
+        else { return [] }
+
+        var out: [Candidate] = []
+        for splitAt in tailStart...(buf.count - 2) {
+            let prefix = Array(buf[0..<splitAt])
+            guard let prefixText = mixedPrefix(prefix) else { continue }
+            let tail = Array(buf[splitAt..<buf.count])
+            var chinese = collectDict(tail, limit, [])
+            if let alt = umlautVariant(tail) {
+                chinese = collectDict(alt, limit, chinese)
+            }
+            for c in chinese {
+                let text = prefixText + " " + c.text
+                let score = c.score + (freq?.boost(text) ?? 0)
+                out = insertCandidate(out, Candidate(text, splitAt + c.codeLen, score), limit)
+            }
+        }
+        return out
+    }
+
+    func mixedPrefix(_ prefix: [UInt8]) -> String? {
+        if prefix.count == 1 {
+            return String(decoding: prefix, as: UTF8.self)
+        }
+        if prefix.allSatisfy({ $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z") }) {
+            return String(decoding: prefix, as: UTF8.self)
+        }
+        guard let english else { return nil }
+        let lower = Array(String(decoding: prefix, as: UTF8.self).lowercased().utf8)
+        guard lower.count >= englishMinExact,
+              lower.allSatisfy({ $0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z") }),
+              let match = english.lookup(lower, exactOnly: true, limit: 1).first
+        else { return nil }
+        return englishDisplay(match.display, for: prefix)
     }
 
     /// 把当前页指向 stream 的第 target 页切片。调用前须保证该页有候选。

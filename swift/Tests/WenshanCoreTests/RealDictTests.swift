@@ -13,6 +13,14 @@ final class RealDictTests: XCTestCase {
         throw XCTSkip("没有 dict.bin，先跑 sh scripts/build.sh")
     }
 
+    func loadEnglishDict() -> EnglishDict? {
+        let candidates = ["../english.bin", "english.bin"]
+        for path in candidates where FileManager.default.fileExists(atPath: path) {
+            return try? EnglishDict(data: Data(contentsOf: URL(fileURLWithPath: path)))
+        }
+        return nil
+    }
+
     func testRealDict() throws {
         let d = try loadDict()
         XCTAssertGreaterThan(d.count, 100_000)
@@ -28,6 +36,13 @@ final class RealDictTests: XCTestCase {
         let e3 = Engine(dict: d)
         typeKeys(e3, "wofaxmv")
         XCTAssertEqual(e3.candidates.first?.text, "我发现这")
+
+        let e4 = Engine(dict: d)
+        if let eng = loadEnglishDict() { e4.setEnglishDict(eng) }
+        let s4 = Session(eng: e4)
+        _ = s4.shiftLetter(UInt8(ascii: "B"))
+        typeKeys(s4, "vj")
+        XCTAssertEqual(s4.candidates.first?.text, "B 站")
     }
 
     /// 只打印耗时，不做断言；release 下跑更接近实际。

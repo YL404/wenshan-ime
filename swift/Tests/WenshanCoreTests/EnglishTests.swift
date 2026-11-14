@@ -214,4 +214,144 @@ final class EnglishCandidateTests: XCTestCase {
         XCTAssertTrue(e.page(1))
         XCTAssertEqual(e.candidates.map(\.text), ["abcdef"])
     }
+
+    /// Shift+B 接 vj 生成「B 站」，前面是中文时上屏仍自动补空格。
+    func testMixedSingleUpperLetterAndPinyin() {
+        let e = engine(
+            [
+                Entry(code: "vj", text: "站", weight: 5000),
+                Entry(code: "vj", text: "占", weight: 1000),
+            ],
+            [])
+        let doc = "看"
+        let s = Session(eng: e)
+        s.setLookbehind { doc.unicodeScalars.last }
+        _ = s.shiftLetter(UInt8(ascii: "B"))
+        typeKeys(s, "vj")
+        XCTAssertEqual(s.preedit, "Bvj")
+        XCTAssertEqual(s.candidates.first?.text, "B 站")
+        XCTAssertEqual(s.candidates.last?.text, "Bvj")
+        let res = s.select(0)
+        XCTAssertEqual(res.text, " B 站")
+        XCTAssertTrue(s.preedit.isEmpty)
+    }
+
+    /// 混输长句组句和分段选词：Bvjdm 先组出「B 站点」，先选「B 站」后剩余 dm 继续出「点」。
+    func testMixedComposeAndPartialSelect() {
+        let e = engine(
+            [
+                Entry(code: "vj", text: "站", weight: 5000),
+                Entry(code: "dm", text: "点", weight: 4000),
+            ],
+            [])
+        let s = Session(eng: e)
+        _ = s.shiftLetter(UInt8(ascii: "B"))
+        typeKeys(s, "vjdm")
+        XCTAssertEqual(s.candidates.first?.text, "B 站点")
+        guard let partialIdx = s.candidates.firstIndex(where: { $0.text == "B 站" }) else {
+            return XCTFail("缺少可继续组词的混输短候选 B 站")
+        }
+        XCTAssertEqual(s.select(partialIdx).text, "B 站")
+        XCTAssertEqual(s.preedit, "dm")
+        XCTAssertEqual(s.candidates.first?.text, "点")
+    }
+
+    /// 全大写缩写和英文词典词也能接双拼后缀，并且支持 ü 变体。
+    func testMixedAcronymAndEnglishWordPrefix() {
+        let e = engine(
+            [
+                Entry(code: "vuuu", text: "助手", weight: 5000),
+                Entry(code: "uddm", text: "商店", weight: 5000),
+                Entry(code: "bm", text: "版", weight: 5000),
+                Entry(code: "jixv", text: "继续", weight: 5000),
+            ],
+            [
+                EnglishEntry(code: "app", display: "app", weight: 900),
+                EnglishEntry(code: "iphone", display: "iPhone", weight: 900),
+            ])
+        let s = Session(eng: e)
+        _ = s.shiftLetter(UInt8(ascii: "A"))
+        _ = s.shiftLetter(UInt8(ascii: "I"))
+        typeKeys(s, "vuuu")
+        XCTAssertEqual(s.candidates.first?.text, "AI 助手")
+
+        _ = s.escape()
+        _ = s.shiftLetter(UInt8(ascii: "A"))
+        typeKeys(s, "ppuddm")
+        XCTAssertEqual(s.candidates.first?.text, "App 商店")
+
+        _ = s.escape()
+        _ = s.type(UInt8(ascii: "i"))
+        _ = s.shiftLetter(UInt8(ascii: "P"))
+        typeKeys(s, "honebm")
+        XCTAssertEqual(s.candidates.first?.text, "iPhone 版")
+
+        _ = s.escape()
+        _ = s.shiftLetter(UInt8(ascii: "A"))
+        typeKeys(s, "jixu")
+        XCTAssertEqual(s.candidates.first?.text, "A 继续")
+    }
+
+    /// 精确英文单词优先级高于拆字混排；全小写和单字母后缀不误触发混输。
+    func testMixedDoesNotStealExactEnglishOrLowercase() {
+        let e = engine(
+            [
+                Entry(code: "aj", text: "安", weight: 9000),
+                Entry(code: "vj", text: "站", weight: 9000),
+                Entry(code: "bu", text: "不", weight: 9000),
+            ],
+            [
+                EnglishEntry(code: "fan", display: "fan", weight: 100),
+            ])
+        let s = Session(eng: e)
+        _ = s.shiftLetter(UInt8(ascii: "F"))
+        typeKeys(s, "aj")
+        // F + aj 在无精确英文词时出「F 安」
+        XCTAssertEqual(s.candidates.first?.text, "F 安")
+
+        // 精确命中英文单词 fan 时，Fan 必须排在「F 安」前面。
+        let e2 = engine(
+            [Entry(code: "an", text: "安", weight: 9000)],
+            [EnglishEntry(code: "fan", display: "fan", weight: 100)])
+        let s2 = Session(eng: e2)
+        _ = s2.shiftLetter(UInt8(ascii: "F"))
+        typeKeys(s2, "an")
+        XCTAssertEqual(s2.candidates.first?.text, "Fan")
+        XCTAssertTrue(s2.candidates.contains { $0.text == "F 安" })
+
+        // 全小写 bvj 不拆成「b 站」。
+        _ = s.escape()
+        typeKeys(s, "bvj")
+        XCTAssertFalse(s.candidates.contains { $0.text == "b 站" })
+
+        // 单键后缀（Bv）不误拆，保持原文兜底。
+        _ = s.escape()
+        _ = s.shiftLetter(UInt8(ascii: "B"))
+        _ = s.type(UInt8(ascii: "v"))
+        XCTAssertEqual(s.candidates.first?.text, "Bv")
+    }
+
+    /// 选过「B 站」后词频会把「B 站」学到权重更高的同音字前面。
+    func testMixedCandidateFreqLearning() {
+        let e = engine(
+            [
+                Entry(code: "vj", text: "战", weight: 9000),
+                Entry(code: "vj", text: "站", weight: 5000),
+            ],
+            [])
+        e.setFreq(Freq())
+        let s = Session(eng: e)
+        _ = s.shiftLetter(UInt8(ascii: "B"))
+        typeKeys(s, "vj")
+        XCTAssertEqual(s.candidates.first?.text, "B 战")
+        for _ in 0..<5 {
+            guard let idx = s.candidates.firstIndex(where: { $0.text == "B 站" }) else {
+                return XCTFail("找不到 B 站")
+            }
+            XCTAssertEqual(s.select(idx).text, "B 站")
+            _ = s.shiftLetter(UInt8(ascii: "B"))
+            typeKeys(s, "vj")
+        }
+        XCTAssertEqual(s.candidates.first?.text, "B 站")
+    }
 }
