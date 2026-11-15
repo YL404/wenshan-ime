@@ -13,6 +13,6 @@
 ## 构建与验证
 
 - `sh swift/scripts/build.sh` 构建 `build/Wenshan.app`；`sh swift/scripts/install.sh` 装成「文山」。
-- 首次构建自动下载 rime-ice 词库，用 `swift/Sources/dictgen` 生成 `dict.bin`（约 17 MB）。
+- 首次构建自动下载万象拼音词库，用 `swift/Sources/dictgen` 生成 `dict.bin`（约 48 MB）。
 - 日志：`~/Library/Logs/Wenshan.log`。按键调试：`touch ~/Library/Application\ Support/Wenshan/debug` 后重启输入法。
 - 项目结构和按键行为见 README.md。

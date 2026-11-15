@@ -33,7 +33,7 @@ macOS 上的双拼输入法，另有 iOS 键盘扩展。键位为自然码。两
 sh swift/scripts/install.sh
 ```
 
-首次会下载 rime-ice 词库并编译成 `dict.bin`（约 17 MB，已 gitignore）。安装沿用
+首次会下载万象拼音词库并编译成 `dict.bin`（约 48 MB，已 gitignore）。安装沿用
 固定的 bundle id、输入源和 `~/Library/Application Support/Wenshan` 下的词频/短语，
 覆盖安装不用重新添加输入源。
 
@@ -106,12 +106,13 @@ ios/                           iOS 宿主 App 和键盘扩展
 scripts/                       下载词库、一键修复
 ```
 
-词表流水线：`scripts/fetch-dict.sh` 下载 rime-ice 的 `8105` + `base` + `others`
-（约 55 万条）和 `en` + `en_ext` 英文词库（约 2.2 万条），`dictgen` 把中文音节转成
-两键编码、英文词按小写编码排序，分别生成 `dict.bin` 和 `english.bin` 供二分查找，
-中文表另存 26 个字母的单键候选（一级简码优先）。单字辅码表来自 rime-frost 的
-`moqi_aux_code.txt`，按 2+1 / 2+2 生成三码、四码条目。两张表编码空间不同，分开存，
-英文候选不会污染双拼组句和辅码判断。
+词表流水线：`scripts/fetch-dict.sh` 下载万象拼音（`rime-wanxiang-data`）的核心简体词库
+`zi` + `duoyin` + `jichu` + `diming` + `mingren` 和 `en` 英文词库（约 7.1 万条），
+`dictgen` 将带调拼音归一化并转成自然码两键编码、从多字短语里提炼 25 万条静态二元搭配、
+英文词按小写编码排序，分别生成 `dict.bin` 和 `english.bin` 供二分查找；中文表另存 26 个
+字母的单键候选（一级简码优先）。单字辅码表来自 rime-frost 的 `moqi_aux_code.txt`，按
+2+1 / 2+2 生成三码、四码条目。两张表编码空间不同，分开存，英文候选不会污染双拼组句和
+辅码判断。
 
 ## 设计取舍
 
@@ -126,11 +127,13 @@ C++、手写几十个函数绑定、YAML 配置。自建词表引擎只要一次
 
 ## 词库与用户数据
 
-选过的词记在 `~/Library/Application Support/Wenshan/freq.tsv`：两列「词<TAB>次数」是词频，
-三列「上文末字<TAB>词<TAB>次数」是接续，输入法用它把常接着上一个词出现的候选往前排；
-上屏的多字词还会拆出内部相邻字接续，组句时按「前段末字 → 本段」逐段加权。接续靠实际
-选词积累，冷启动时没有加成。一次组合里连续单字选词会记成自造词存在同目录的
-`userdict.tsv`。删掉文件即清空。
+选过的词记在 `~/Library/Application Support/Wenshan/freq.tsv`：三列
+「编码<TAB>词<TAB>次数」是按编码隔离的用户词频（防止多音字跨读音污染），三列
+「上文末字<TAB>词<TAB>次数」是接续，输入法用它把常接着上一个词出现的候选往前排；
+上屏的多字词还会拆出内部相邻字接续，组句时结合词表内置的静态二元搭配与局部 Beam 搜索
+逐段加权。上下文接续会在超时（5 秒）、输入标点或切换输入框后自动重置；选错后立即
+退格会回滚刚刚记录的词频和自造词；数字后输入单字量词会自动提权。一次组合里连续单字
+选词会记成自造词存在同目录的 `userdict.tsv`。删掉文件即清空。
 
 自定义短语放在同目录的 `phrases.tsv`，每行「编码<TAB>文本」，空行和 `#` 开头的行忽略，
 编码用小写字母。固定大小写的英文专名也放这里，例如 `myteam<TAB>MyTeam`、
@@ -163,7 +166,7 @@ sh scripts/repair.sh
 
 ## 许可
 
-中文词表和英文词表都来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），
+中文词表和英文词表来自 [rime-wanxiang-data](https://github.com/amzxyz/rime-wanxiang-data)（CC BY 4.0），
 单字辅码表来自 [rime-frost](https://github.com/gaboolic/rime-frost) 的墨奇部首码
-（GPL-3.0），因此本项目整体以 GPL-3.0 发布，词表和辅码表版权归各自作者所有。
+（GPL-3.0），程序代码部分以 GPL-3.0 发布，词表和辅码表版权归各自作者所有。
 完整许可证文本见 [LICENSE](LICENSE)。

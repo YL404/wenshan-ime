@@ -6,7 +6,8 @@
 ## 结构
 
 - `Sources/WenshanCore/`：中文词表、英文词表、自然码、组句、纠错、词频、输入规则；iOS 键盘也直接链接它。
-  组句按「前段末字 → 本段」接续选词，英文候选由独立词表按小写编码查询，大小写按输入推导。
+  组句结合静态二元搭配、Beam 搜索和「前段末字 → 本段」接续选词，用户词频按编码隔离并支持
+  上下文超时重置、立即退格回滚与数字后量词提权；英文候选由独立词表按小写编码查询，大小写按输入推导。
   `Session.swift` 还管成对标点补全与跨过、两秒内重按标点转中文、中文标点后按空格改回半角、
   长按按音节退格；`KeyGeometry.swift` 记录字母键矩形与落点，纠错按「离目标键心更近」加权。
   候选页大小（1–9）与候选置顶/删除（连词频、自造词一起清）也在规则层，iOS 壳只是转发偏好和手势
@@ -17,7 +18,7 @@
   - `AppState.swift`：按键分类、上屏、预编辑、光标、Shift 和模式提示
   - `CandidateWindow.swift`：NSPanel 候选条和模式 HUD
   - `InputSource.swift`：TIS 注册、选中、启用、移除、原子交换 bundle
-- `Sources/dictgen/`：把 Rime 中文词库和单字辅码表编译成 `dict.bin`，把 rime-ice 英文词库
+- `Sources/dictgen/`：把万象带调中文词库和单字辅码表编译成 `dict.bin`（含静态二元搭配），把英文词库
   编译成 `english.bin`；同一份输入每次生成的文件逐字节相同
 - `Sources/icon/`：画 App 图标、输入源图标和 iOS AppIcon，扫描线填充，不依赖绘图库
 - `Resources/`：Info.plist 和输入源本地化名
@@ -46,10 +47,13 @@ CODESIGN_IDENTITY="Apple Development: 你的名字 (XXXXXXXXXX)" sh swift/script
 ```sh
 sh scripts/fetch-dict.sh
 swift run -c release --package-path swift dictgen -o dict.bin \
+	-min-long-weight 20 \
 	-aux build/aux/moqi_aux_code.txt \
-	build/rime-ice/8105.dict.yaml build/rime-ice/base.dict.yaml build/rime-ice/others.dict.yaml
+	build/wanxiang/zi.dict.yaml build/wanxiang/duoyin.dict.yaml \
+	build/wanxiang/jichu.dict.yaml build/wanxiang/diming.dict.yaml \
+	build/wanxiang/mingren.dict.yaml
 swift run -c release --package-path swift dictgen -english -o english.bin \
-	build/rime-ice/en.dict.yaml build/rime-ice/en_ext.dict.yaml
+	build/wanxiang/en.dict.yaml
 swift run -c release --package-path swift icon \
 	-out build/Wenshan.iconset -menu-out build/WenshanMenu.iconset -preview assets/icon.png
 ```
