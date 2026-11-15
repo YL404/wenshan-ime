@@ -200,9 +200,12 @@ extension Dict {
                 sum - segmentPenalty * Double(path.count) - typoPenalty
                     + segmentPenalty + touchScores[1][syls]) - 1
             let text = String(decoding: bytes, as: UTF8.self)
+            let bufCode = String(decoding: buf, as: UTF8.self)
             out = insertCandidate(
                 out,
-                Candidate(text, buf.count, Int64(tierTypo) << 40 | Int64(clampWeight(w))),
+                Candidate(
+                    text, buf.count, Int64(tierTypo) << 40 | Int64(clampWeight(w)),
+                    code: bufCode),
                 limit)
         }
         emit(-1, AltText(text: "", weight: 0))

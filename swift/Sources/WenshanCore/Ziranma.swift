@@ -4,6 +4,48 @@
 /// 规则），逐条还原成「声母键 + 韵母键」两张表。因为双拼每个音节固定两个键，
 /// 编码全等长且可拼接，查词只需要一次前缀匹配，不需要切分歧义。
 public enum Ziranma {
+    static let tonedCharMap: [Unicode.Scalar: Character] = [
+        "ā": "a", "á": "a", "ǎ": "a", "à": "a",
+        "ē": "e", "é": "e", "ě": "e", "è": "e",
+        "ī": "i", "í": "i", "ǐ": "i", "ì": "i",
+        "ō": "o", "ó": "o", "ǒ": "o", "ò": "o",
+        "ū": "u", "ú": "u", "ǔ": "u", "ù": "u",
+        "ü": "v", "ǖ": "v", "ǘ": "v", "ǚ": "v", "ǜ": "v",
+        "ń": "n", "ň": "n", "ǹ": "n",
+        "ḿ": "m",
+    ]
+
+    /// 把带调拼音音节归一化为无调 ASCII 小写（ü → v，成音节鼻音按自然码展开）。
+    public static func normalizeSyllable(_ syl: String) -> String {
+        var out = ""
+        out.reserveCapacity(syl.utf8.count)
+        for scalar in syl.lowercased().unicodeScalars {
+            if let mapped = tonedCharMap[scalar] {
+                out.append(mapped)
+                continue
+            }
+            if scalar.properties.generalCategory == .nonspacingMark {
+                // 兼容 NFD 分解后的组合音调符号；若是分音符 U+0308 (u + ¨)，把前一个 u 改写成 v。
+                if scalar.value == 0x0308, out.last == "u" {
+                    out.removeLast()
+                    out.append("v")
+                }
+                continue
+            }
+            if scalar.value >= UInt32(UInt8(ascii: "a")) && scalar.value <= UInt32(UInt8(ascii: "z")) {
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        switch out {
+        case "ng": return "eng"
+        case "n": return "en"
+        case "m": return "me"
+        case "hm": return "he"
+        case "hng": return "heng"
+        default: return out
+        }
+    }
+
     /// 自然码里占一个键的双字母声母。
     static let twoLetterInitials: [String: UInt8] = [
         "zh": UInt8(ascii: "v"),
@@ -66,6 +108,7 @@ public enum Ziranma {
     /// 返回一个音节的两键写法。Rime 用 derive 保留了部分原始拼写
     /// （ju/qu/xu/yu、零声母的 ai/ao/an/en/ou），这些也一并返回。
     static func syllableCodes(_ syl: String) -> [String] {
+        let syl = normalizeSyllable(syl)
         guard !syl.isEmpty else { return [] }
         let bytes = Array(syl.utf8)
         let (initial, fin) = splitSyllable(syl)

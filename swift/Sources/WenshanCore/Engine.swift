@@ -1,3 +1,5 @@
+import Foundation
+
 /// 输入缓冲的上限（字节，双拼每音节两字节）。
 let maxBuf = 32
 
@@ -78,6 +80,17 @@ public final class Engine {
     /// 这一轮缓冲要不要查英文词表。中文态字母输入由 Session 打开，
     /// 纯拼音组句（例如先选词后剩余缓冲）不需要被英文候选干扰。
     public var englishQuery = false
+    /// 当前输入前一个字符是否为数字（供单字量词提权）。
+    public var afterDigit = false
+
+    struct CommitRecord {
+        var freqDelta: FreqDelta?
+        var learnedUserCode: String?
+        var learnedUserText: String?
+        var committedAt: TimeInterval
+        var generation: Int
+    }
+    var lastCommit: CommitRecord?
 
     /// 候选页大小（1...maxCandidates）。macOS 固定 9，iOS 按自己的偏好设置。
     public var pageSize = maxCandidates {
@@ -180,6 +193,7 @@ public final class Engine {
     public func backspace() -> Bool {
         guard !buf.isEmpty else { return false }
         buf.removeLast()
+        if buf.isEmpty { afterDigit = false }
         refresh()
         return true
     }
@@ -190,6 +204,7 @@ public final class Engine {
         guard !buf.isEmpty else { return false }
         let drop = buf.count % 2 == 0 ? 2 : 1
         buf.removeLast(min(drop, buf.count))
+        if buf.isEmpty { afterDigit = false }
         refresh()
         return true
     }
@@ -203,6 +218,7 @@ public final class Engine {
         cands = []
         page = 0
         englishQuery = false
+        afterDigit = false
         picked.removeAll(keepingCapacity: true)
         pickedCode.removeAll(keepingCapacity: true)
         singles = 0
@@ -212,10 +228,39 @@ public final class Engine {
         sessionValid = true
     }
 
+    /// 清空上下文与待撤销快照（输入标点或切换输入框时调用）。
+    public func clearContext() {
+        freq?.clearContext()
+        lastCommit = nil
+    }
+
+    /// 上屏后紧接着退格：回滚最近一次上屏写入的词频与自造词学习。
+    @discardableResult
+    public func rollbackLastCommit(
+        generation: Int = 0, now: TimeInterval = Date.timeIntervalSinceReferenceDate
+    ) -> Bool {
+        guard let rec = lastCommit else { return false }
+        lastCommit = nil
+        guard rec.generation == generation, now - rec.committedAt <= contextTimeout else {
+            return false
+        }
+        if let delta = rec.freqDelta {
+            freq?.rollback(delta)
+        }
+        if let code = rec.learnedUserCode, let text = rec.learnedUserText {
+            user?.removeExact(code: code, text: text)
+        }
+        return true
+    }
+
     /// 取出第 i 个候选并把它占用的编码从缓冲里去掉，返回上屏文本。
     /// 剩余缓冲会重新查词，所以可以连续选词。
     public func select(_ i: Int) -> (String, Bool) {
-        selectCandidate(i, nil)
+        selectCandidate(i, nil, generation: 0)
+    }
+
+    func select(_ i: Int, generation: Int) -> (String, Bool) {
+        selectCandidate(i, nil, generation: generation)
     }
 
     /// 取出第 i 个候选的首字或尾字。编码消耗和 select 一样。
@@ -227,7 +272,9 @@ public final class Engine {
         }
     }
 
-    func selectCandidate(_ i: Int, _ pick: ((String) -> String)?) -> (String, Bool) {
+    func selectCandidate(
+        _ i: Int, _ pick: ((String) -> String)?, generation: Int = 0
+    ) -> (String, Bool) {
         guard i >= 0, i < cands.count else { return ("", false) }
         let c = cands[i]
         var text = c.text
@@ -239,7 +286,13 @@ public final class Engine {
         // 这种情况把缓冲整个消耗掉即可。
         var used = c.codeLen
         if used > buf.count { used = buf.count }
-        freq?.bump(text)
+        let entryCode: String
+        if pick == nil && !c.code.isEmpty {
+            entryCode = c.code
+        } else {
+            entryCode = String(decoding: buf.prefix(used), as: UTF8.self)
+        }
+        let delta = freq?.bump(text, code: entryCode)
         // 连续单字选词说明词库里没有这个词，组合结束后记成自造词。
         // 编码只取这串单字自己占用的按键，不能带上前面选过的多字词。
         if c.codeLen == 2 {
@@ -266,16 +319,25 @@ public final class Engine {
             sessionValid = false
         }
         buf.removeFirst(used)
+        var learnedCode: String?
+        var learnedText: String?
         if buf.isEmpty {
             if singles >= 2 && pickedCode.count >= 4 {
-                user?.add(
-                    code: String(decoding: pickedCode, as: UTF8.self),
-                    text: String(decoding: picked, as: UTF8.self))
+                let cStr = String(decoding: pickedCode, as: UTF8.self)
+                let tStr = String(decoding: picked, as: UTF8.self)
+                if user?.add(code: cStr, text: tStr) == true {
+                    learnedCode = cStr
+                    learnedText = tStr
+                }
             } else if sessionValid && sessionSteps == 2 && sessionCode.count == 6 {
                 let code = umlautVariant(sessionCode) ?? sessionCode
                 let phrase = String(decoding: sessionText, as: UTF8.self)
                 if !(dict?.containsExact(code, phrase) ?? false) {
-                    user?.add(code: String(decoding: code, as: UTF8.self), text: phrase)
+                    let cStr = String(decoding: code, as: UTF8.self)
+                    if user?.add(code: cStr, text: phrase) == true {
+                        learnedCode = cStr
+                        learnedText = phrase
+                    }
                 }
             }
             picked.removeAll(keepingCapacity: true)
@@ -286,7 +348,14 @@ public final class Engine {
             sessionSteps = 0
             sessionValid = true
             englishQuery = false
+            afterDigit = false
         }
+        lastCommit = CommitRecord(
+            freqDelta: delta,
+            learnedUserCode: learnedCode,
+            learnedUserText: learnedText,
+            committedAt: Date.timeIntervalSinceReferenceDate,
+            generation: generation)
         refresh()
         return (text, true)
     }
@@ -437,7 +506,7 @@ public final class Engine {
         guard let dict else { return cands }
         if buf.count == 1 {
             // 单键：给出这个键开头的最高频词，例如 l → 了。
-            cands = mergeCandidates(cands, dict.short(buf[0], freq), limit)
+            cands = mergeCandidates(cands, dict.short(buf[0], freq, afterDigit: afterDigit), limit)
         } else {
             cands = collectDict(buf, limit, cands)
         }
@@ -453,7 +522,8 @@ public final class Engine {
     func collectDict(_ code: [UInt8], _ limit: Int, _ cands: [Candidate]) -> [Candidate] {
         var cands = cands
         guard let dict, code.count >= 2 else { return cands }
-        cands = mergeCandidates(cands, dict.lookup(code, limit: limit, freq: freq), limit)
+        cands = mergeCandidates(
+            cands, dict.lookup(code, limit: limit, freq: freq, afterDigit: afterDigit), limit)
         for c in dict.compose(code, limit: limit, freq: freq) {
             cands = insertCandidate(cands, c, limit)
         }
@@ -483,8 +553,10 @@ public final class Engine {
             }
             for c in chinese {
                 let text = prefixText + " " + c.text
-                let score = c.score + (freq?.boost(text) ?? 0)
-                out = insertCandidate(out, Candidate(text, splitAt + c.codeLen, score), limit)
+                let fullCode = String(decoding: prefix, as: UTF8.self) + (c.code.isEmpty ? "" : c.code)
+                let score = c.score + (freq?.boost(text, code: fullCode) ?? 0)
+                out = insertCandidate(
+                    out, Candidate(text, splitAt + c.codeLen, score, code: fullCode), limit)
             }
         }
         return out
@@ -550,11 +622,15 @@ public final class Engine {
 
     /// 选出流里的第 i 个候选，索引可以落在后续页。
     public func selectGlobal(_ i: Int) -> (String, Bool) {
+        selectGlobal(i, generation: 0)
+    }
+
+    func selectGlobal(_ i: Int, generation: Int) -> (String, Bool) {
         if i < 0 { return ("", false) }
         ensure(i + 1)
         if i >= stream.count { return ("", false) }
         cands = stream
-        return select(i)
+        return select(i, generation: generation)
     }
 
     /// 选出流里第 i 个候选的首字或尾字，索引可以落在后续页。

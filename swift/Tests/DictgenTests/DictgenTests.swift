@@ -53,4 +53,43 @@ final class DictgenTests: XCTestCase {
         XCTAssertEqual(best[entryKey("jv", "居")]?.weight, 50)
         XCTAssertEqual(best[entryKey("ju", "居")]?.weight, 50)
     }
+
+    /// 带调拼音、鼻音成音节及长词低权重过滤应正确解析，并提炼出最优二元搭配。
+    func testLoadTonedWanxiangAndExtractBigrams() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wanxiang-\(UUID().uuidString).yaml")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let text = """
+            ---
+            name: test
+            ...
+            你\tnǐ\t1547364
+            好\thǎo\t6391074
+            冷\tlěng\t50000
+            静\tjìng\t40000
+            冷静\tlěng jìng\t20000
+            地\tde\t3046482
+            的\tde\t48288412
+            冷静地\tlěng jìng de\t1052
+            嗯\tńg\t500
+            旅\tlǚ\t3000
+            略\tlǜe\t2000
+            生僻长词\tshēng pì cháng cí\t5
+            """
+        try Data(text.utf8).write(to: url)
+
+        var best: EntryMap = [:]
+        var corpus = BigramCorpus()
+        _ = try loadRime(
+            url.path, into: &best, corpus: &corpus, minLongWeight: 20, collectBigrams: true)
+        XCTAssertEqual(best[entryKey("ni", "你")]?.weight, 1_547_364)
+        XCTAssertEqual(best[entryKey("eg", "嗯")]?.weight, 500)
+        XCTAssertEqual(best[entryKey("lv", "旅")]?.weight, 3000)
+        XCTAssertEqual(best[entryKey("lt", "略")]?.weight, 2000)
+        XCTAssertNil(best[entryKey("ugpiihci", "生僻长词")], "低于 minLongWeight 的长词应被过滤")
+
+        let bigrams = extractBigrams(corpus, limit: 100, minWeight: 80)
+        let targetHash = bigramHash("冷静", "地")
+        XCTAssertEqual(bigrams.first { $0.hash == targetHash }?.weight, 1052)
+    }
 }

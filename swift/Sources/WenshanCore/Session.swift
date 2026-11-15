@@ -100,6 +100,7 @@ public final class Session {
         lastASCIIDirect = nil
         lastCJKPunct = nil
         pairStack.removeAll()
+        eng?.clearContext()
     }
 
     public var currentMode: Mode { mode }
@@ -162,7 +163,10 @@ public final class Session {
     @discardableResult
     public func type(_ ch: UInt8) -> Result {
         guard mode == .chinese, let eng else { return result("", false) }
-        if eng.buffer.isEmpty { englishRun = false }
+        if eng.buffer.isEmpty {
+            englishRun = false
+            eng.afterDigit = digitBefore("")
+        }
         var c = ch
         if !englishRun, c >= UInt8(ascii: "A"), c <= UInt8(ascii: "Z") {
             c += UInt8(ascii: "a") - UInt8(ascii: "A")
@@ -227,6 +231,10 @@ public final class Session {
         }
         lastASCIIDirect = nil
         lastCJKPunct = nil
+        if inserted.unicodeScalars.count == 1, let s = inserted.unicodeScalars.first,
+           s.value < 0x80, !isASCIIAlnum(UInt8(s.value)) {
+            eng?.clearContext()
+        }
         return result(commitText(out, inserted), true)
     }
 
@@ -261,6 +269,7 @@ public final class Session {
             syncEnglishRun()
             return result("", true)
         }
+        eng?.rollbackLastCommit(generation: editorGeneration)
         lastASCIIDirect = nil
         lastCJKPunct = nil
         return result("", false)
@@ -273,6 +282,7 @@ public final class Session {
             syncEnglishRun()
             return result("", true)
         }
+        eng?.rollbackLastCommit(generation: editorGeneration)
         lastASCIIDirect = nil
         lastCJKPunct = nil
         return result("", false)
@@ -298,7 +308,7 @@ public final class Session {
     /// 选中第 i 个候选并上屏。
     public func select(_ i: Int) -> Result {
         guard let eng else { return result("", false) }
-        return selected(eng.select(i))
+        return selected(eng.select(i, generation: editorGeneration))
     }
 
     /// 取第 i 个候选的首字或尾字。
@@ -310,7 +320,7 @@ public final class Session {
     /// 选出全部候选里的第 i 个并上屏，索引可以落在后续页。
     public func selectGlobal(_ i: Int) -> Result {
         guard let eng else { return result("", false) }
-        return selected(eng.selectGlobal(i))
+        return selected(eng.selectGlobal(i, generation: editorGeneration))
     }
 
     /// 取全部候选里第 i 个候选的首字或尾字，索引可以落在后续页。
@@ -363,11 +373,13 @@ public final class Session {
                 if pending == closeScalar { pairStack.removeLast() }
                 lastASCIIDirect = nil
                 lastCJKPunct = nil
+                eng?.clearContext()
                 return result(out, true, caretOffset: 1)
             }
             pairStack.append((closeScalar, editorGeneration))
             lastASCIIDirect = nil
             lastCJKPunct = nil
+            eng?.clearContext()
             return result(out + String(openScalar) + String(closeScalar), true, caretOffset: -1)
         } else {
             punct = punctuateChar(ch, alts)
@@ -385,6 +397,7 @@ public final class Session {
                     if pending == close { pairStack.removeLast() }
                     lastASCIIDirect = nil
                     lastCJKPunct = nil
+                    eng?.clearContext()
                     return result(out, true, caretOffset: 1)
                 }
             }
@@ -392,6 +405,7 @@ public final class Session {
             if let close = pairedOpens[scalar] {
                 pairStack.append((close, editorGeneration))
                 lastCJKPunct = nil
+                eng?.clearContext()
                 return result(out + String(scalar) + String(close), true, caretOffset: -1)
             }
         }
@@ -401,6 +415,7 @@ public final class Session {
             lastCJKPunct = nil
         }
         lastASCIIDirect = nil
+        eng?.clearContext()
         return result(out + punct, true)
     }
 
@@ -455,7 +470,7 @@ public final class Session {
     func commitPending() -> String {
         if buffer.isEmpty { return "" }
         if let eng {
-            let (text, ok) = eng.select(0)
+            let (text, ok) = eng.select(0, generation: editorGeneration)
             if ok { return commitText("", text) }
         }
         return commitRaw("")

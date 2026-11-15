@@ -15,15 +15,26 @@ func fail(_ message: String) -> Never {
 var output = "dict.bin"
 var auxPath = ""
 var englishOnly = false
+var minLongWeight: UInt32 = 0
+var buildBigrams = true
 var inputs: [String] = []
 var args = CommandLine.arguments.dropFirst()
 while let arg = args.popFirst() {
     switch arg {
-    case "-o", "-aux":
+    case "-o", "-aux", "-min-long-weight":
         guard let value = args.popFirst() else { fail("\(arg) 后面缺参数") }
-        if arg == "-o" { output = value } else { auxPath = value }
+        if arg == "-o" {
+            output = value
+        } else if arg == "-aux" {
+            auxPath = value
+        } else {
+            guard let v = UInt32(value) else { fail("-min-long-weight 需要非负整数: \(value)") }
+            minLongWeight = v
+        }
     case "-english":
         englishOnly = true
+    case "-no-bigram":
+        buildBigrams = false
     default:
         if arg.hasPrefix("-") { fail("不认识的参数 \(arg)") }
         inputs.append(arg)
@@ -53,9 +64,13 @@ if englishOnly {
 }
 
 var best: EntryMap = [:]
+var corpus = BigramCorpus()
 for path in inputs {
     do {
-        print("\(path): \(try loadRime(path, into: &best)) 条")
+        let base = URL(fileURLWithPath: path).lastPathComponent
+        let collect = buildBigrams && (base == "zi.dict.yaml" || base == "jichu.dict.yaml" || base == "duoyin.dict.yaml")
+        let fileMinLong = base == "duoyin.dict.yaml" ? 0 : minLongWeight
+        print("\(path): \(try loadRime(path, into: &best, corpus: &corpus, minLongWeight: fileMinLong, collectBigrams: collect)) 条")
     } catch {
         fail("\(path): \(error)")
     }
@@ -68,7 +83,11 @@ if !auxPath.isEmpty {
     }
 }
 
-let data = writeDict(Array(best.values))
+let bigrams = buildBigrams ? extractBigrams(corpus) : []
+if !bigrams.isEmpty {
+    print("静态二元搭配: \(bigrams.count) 条")
+}
+let data = writeDict(Array(best.values), bigrams: bigrams)
 do {
     try data.write(to: URL(fileURLWithPath: output), options: .atomic)
 } catch {

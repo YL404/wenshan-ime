@@ -101,6 +101,16 @@ public final class UserDict {
         return true
     }
 
+    /// 精确删除某条「编码 + 文本」（用于上屏后立即退格回滚刚学入的自造词）。
+    @discardableResult
+    func removeExact(code: String, text: String) -> Bool {
+        let before = entries.count
+        entries.removeAll { $0.code == code && $0.text == text }
+        guard entries.count != before else { return false }
+        dirty += 1
+        return true
+    }
+
     /// 返回编码以 prefix 开头的自造词，用户词频 f 计入分数，可以为 nil。
     func lookup(_ prefix: [UInt8], _ limit: Int, _ f: Freq?) -> [Candidate] {
         guard !prefix.isEmpty, limit > 0 else { return [] }
@@ -112,7 +122,9 @@ public final class UserDict {
                 out,
                 Candidate(
                     e.text, codeLen,
-                    candidateScore(e.weight, codeLen, prefix.count) + (f?.boost(e.text) ?? 0)),
+                    candidateScore(e.weight, codeLen, prefix.count)
+                        + (f?.boost(e.text, code: e.code) ?? 0),
+                    code: e.code),
                 limit)
         }
         return out

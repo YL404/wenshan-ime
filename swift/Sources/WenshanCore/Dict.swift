@@ -7,14 +7,16 @@ import Foundation
 ///     [8:12]  条目数 n
 ///     [12:16] 字符串区长度
 ///     [16:20] 单字母简码条数 m
-///     [20:24] 保留
-///     之后 n×16 主记录、m×16 简码记录，最后是编码和词条的字符串区。
+///     [20:24] 静态二元搭配条数 b
+///     之后 n×16 主记录、m×16 简码记录、字符串区，最后是 b×12 静态二元搭配记录。
 ///
 /// 主记录按编码升序、同编码按权重降序排列，所以一次二分就能定位前缀区间。
 /// 简码记录是每个字母开头权重最高的若干条，按字母分组，供单键输入使用。
+/// 静态二元搭配记录按 64 位 FNV-1a 哈希升序排列，供组句 DP 做零分配共现查表。
 let dictMagicBytes = Array("WSIME2".utf8)
 let headerSize = 24
 let recordSize = 16
+let bigramRecordSize = 12
 
 /// 一次前缀查询最多检查的条目数，防止两字母前缀退化成全表扫描。
 let maxScan = 20_000
@@ -39,6 +41,19 @@ let composePairBoost = 8.0
 /// 组句总得分映射回整型权重时的基准偏移和缩放，保留多段长句与换字副本的相对排序。
 let composeScoreOffset = 100.0
 let composeScoreScale = 10_000.0
+/// 组句静态二元搭配的最高对数加权。
+let composeStaticBigramBoost = 5.0
+let composeBeamWidth = 2
+/// 数字后面输入量词时的层内提权。
+let classifierBoost: Int64 = 20_000_000
+let classifiers: Set<String> = [
+    "个", "只", "名", "位", "口", "头", "匹", "条", "群", "批", "伙",
+    "张", "把", "件", "台", "部", "块", "根", "颗", "粒", "滴", "片",
+    "年", "月", "周", "天", "日", "岁", "秒", "分", "刻", "代", "期", "届", "任",
+    "米", "寸", "尺", "里", "斤", "两", "吨", "克", "升", "元", "角", "毛",
+    "次", "遍", "回", "场", "趟", "句", "段", "页", "行", "节", "门", "类", "种", "项",
+    "套", "辆", "架", "艘", "座", "栋", "间", "所", "家", "封", "份", "支", "枝", "盏", "双", "对", "副",
+]
 
 public enum DictError: Error, CustomStringConvertible {
     case badHeader
@@ -58,11 +73,14 @@ public struct Candidate: Equatable, Sendable {
     /// 编码长度（字节），选词后要从输入缓冲里去掉这么多。
     public var codeLen: Int
     var score: Int64
+    /// 命中的完整编码（供按编码隔离的用户词频学习）。
+    var code: String
 
-    init(_ text: String, _ codeLen: Int, _ score: Int64) {
+    init(_ text: String, _ codeLen: Int, _ score: Int64, code: String = "") {
         self.text = text
         self.codeLen = codeLen
         self.score = score
+        self.code = code
     }
 }
 
@@ -77,6 +95,35 @@ public struct Entry: Equatable, Sendable {
         self.text = text
         self.weight = weight
     }
+}
+
+/// 构建词表时的一条静态二元搭配记录。
+public struct BigramEntry: Equatable, Sendable {
+    public var hash: UInt64
+    public var weight: UInt32
+
+    public init(hash: UInt64, weight: UInt32) {
+        self.hash = hash
+        self.weight = weight
+    }
+}
+
+/// 确定性 64 位 FNV-1a 哈希，供 dictgen 与运行时二进制检索共用。
+@inline(__always)
+public func bigramHash(_ left: String, _ right: String) -> UInt64 {
+    var h: UInt64 = 14_695_981_039_346_656_037
+    let prime: UInt64 = 1_099_511_628_211
+    for b in left.utf8 {
+        h ^= UInt64(b)
+        h &*= prime
+    }
+    h ^= 0xFF
+    h &*= prime
+    for b in right.utf8 {
+        h ^= UInt64(b)
+        h &*= prime
+    }
+    return h
 }
 
 /// 同一编码下的一种写法。
@@ -160,11 +207,22 @@ func readU32(_ data: Data, _ o: Int) -> UInt32 {
 }
 
 @inline(__always)
+func readU64(_ p: UnsafeRawBufferPointer, _ o: Int) -> UInt64 {
+    UInt64(readU32(p, o)) | (UInt64(readU32(p, o + 4)) << 32)
+}
+
+@inline(__always)
 func writeU32(_ p: inout [UInt8], _ o: Int, _ v: UInt32) {
     p[o] = UInt8(truncatingIfNeeded: v)
     p[o + 1] = UInt8(truncatingIfNeeded: v >> 8)
     p[o + 2] = UInt8(truncatingIfNeeded: v >> 16)
     p[o + 3] = UInt8(truncatingIfNeeded: v >> 24)
+}
+
+@inline(__always)
+func writeU64(_ p: inout [UInt8], _ o: Int, _ v: UInt64) {
+    writeU32(&p, o, UInt32(truncatingIfNeeded: v))
+    writeU32(&p, o + 4, UInt32(truncatingIfNeeded: v >> 32))
 }
 
 /// 数 UTF-8 字节里的码点数。
@@ -198,8 +256,11 @@ public struct Dict: Sendable {
     let data: Data
     let n: Int
     let shortCount: Int
+    let bigramCount: Int
     /// 字符串区在 data 里的起始位置。
     let blobStart: Int
+    /// 静态二元搭配区在 data 里的起始位置。
+    let bigramStart: Int
 
     public init(data: Data) throws {
         guard data.count >= headerSize,
@@ -210,14 +271,21 @@ public struct Dict: Sendable {
         let n = Int(readU32(data, 8))
         let blobLen = Int(readU32(data, 12))
         let short = Int(readU32(data, 16))
+        let bigrams = Int(readU32(data, 20))
         let recEnd = headerSize + (n + short) * recordSize
-        guard recEnd <= data.count, recEnd + blobLen <= data.count else {
+        let bigramStart = recEnd + blobLen
+        guard recEnd <= data.count,
+              bigramStart <= data.count,
+              bigramStart + bigrams * bigramRecordSize <= data.count
+        else {
             throw DictError.truncated
         }
         self.data = data
         self.n = n
         self.shortCount = short
+        self.bigramCount = bigrams
         self.blobStart = recEnd
+        self.bigramStart = bigramStart
     }
 
     /// 条目数。
@@ -299,8 +367,12 @@ extension Dict {
     }
 
     /// 编码以缓冲开头的词，加上前半段已经打完的词，按权重合并排序。
-    public func lookup(_ buf: [UInt8], limit: Int, freq: Freq?) -> [Candidate] {
+    public func lookup(
+        _ buf: [UInt8], limit: Int, freq: Freq?, afterDigit: Bool = false
+    ) -> [Candidate] {
         guard buf.count >= 2, limit > 0, n > 0 else { return [] }
+        let now = Date.timeIntervalSinceReferenceDate
+        let maxFreqBoost = freq?.maxBoost(now: now) ?? 0
         return data.withUnsafeBytes { raw in
             buf.withUnsafeBufferPointer { p in
                 var best: [Candidate] = []
@@ -308,18 +380,23 @@ extension Dict {
                 var l = 2
                 while l < p.count {
                     best = exactInto(
-                        raw, best, UnsafeBufferPointer(rebasing: p[0..<l]), p.count, limit, freq)
+                        raw, best, UnsafeBufferPointer(rebasing: p[0..<l]), p.count, limit, freq,
+                        maxFreqBoost: maxFreqBoost, now: now, afterDigit: afterDigit)
                     l += 2
                 }
                 // 整个缓冲：前缀匹配，含还没打完的长词。
-                return prefixInto(raw, best, p, limit, freq)
+                return prefixInto(
+                    raw, best, p, limit, freq,
+                    maxFreqBoost: maxFreqBoost, now: now, afterDigit: afterDigit)
             }
         }
     }
 
     func prefixInto(
         _ raw: UnsafeRawBufferPointer, _ best: [Candidate],
-        _ prefix: UnsafeBufferPointer<UInt8>, _ limit: Int, _ f: Freq?
+        _ prefix: UnsafeBufferPointer<UInt8>, _ limit: Int, _ f: Freq?,
+        maxFreqBoost: Int64, now: TimeInterval,
+        afterDigit: Bool = false
     ) -> [Candidate] {
         var best = best
         var scanned = 0
@@ -330,7 +407,8 @@ extension Dict {
             let codeLen = codeRange(raw, i).length
             best = offer(
                 raw, best, i, codeLen,
-                lookupScore(weight(raw, i), codeLen, prefix.count), prefix.count, limit, f)
+                lookupScore(weight(raw, i), codeLen, prefix.count), prefix.count, limit, f,
+                maxFreqBoost: maxFreqBoost, now: now, afterDigit: afterDigit)
             i += 1
         }
         return best
@@ -338,7 +416,9 @@ extension Dict {
 
     func exactInto(
         _ raw: UnsafeRawBufferPointer, _ best: [Candidate],
-        _ code: UnsafeBufferPointer<UInt8>, _ bufLen: Int, _ limit: Int, _ f: Freq?
+        _ code: UnsafeBufferPointer<UInt8>, _ bufLen: Int, _ limit: Int, _ f: Freq?,
+        maxFreqBoost: Int64, now: TimeInterval,
+        afterDigit: Bool = false
     ) -> [Candidate] {
         var best = best
         var i = lowerBound(raw, code)
@@ -346,7 +426,8 @@ extension Dict {
             guard codeEquals(raw, i, code) else { break }
             best = offer(
                 raw, best, i, code.count,
-                lookupScore(weight(raw, i), code.count, bufLen), bufLen, limit, f)
+                lookupScore(weight(raw, i), code.count, bufLen), bufLen, limit, f,
+                maxFreqBoost: maxFreqBoost, now: now, afterDigit: afterDigit)
             i += 1
         }
         return best
@@ -357,16 +438,20 @@ extension Dict {
     /// 复制词条文本，省掉热路径上的绝大部分分配。
     func offer(
         _ raw: UnsafeRawBufferPointer, _ best: [Candidate], _ i: Int, _ codeLen: Int,
-        _ base: Int64, _ bufLen: Int, _ limit: Int, _ f: Freq?
+        _ base: Int64, _ bufLen: Int, _ limit: Int, _ f: Freq?,
+        maxFreqBoost: Int64, now: TimeInterval,
+        afterDigit: Bool = false
     ) -> [Candidate] {
-        if !admits(best, limit, base + (f?.maxBoost ?? 0), codeLen) {
+        let extraCeiling: Int64 = afterDigit && codeLen == 2 ? classifierBoost : 0
+        if !admits(best, limit, base + maxFreqBoost + extraCeiling, codeLen) {
             return best
         }
         let (off, len) = textRange(raw, i)
+        let runes = runeCount(raw, off, len)
         // 辅码单字是「单字加部首码」，不是词。无论是三键前缀还是四键撞码，
         // 都不应按单字词频压过真实词组，统一放到 tierAux（高于普通两键短匹配）；
         // 若已打超它的编码长度（tierShort），也保持在常规权重，不抢短词的字节长度加成。
-        let aux = codeLen > 2 && runeCount(raw, off, len) == 1
+        let aux = codeLen > 2 && runes == 1
         let adjusted: Int64
         if aux {
             let auxTier = codeLen >= bufLen ? Int64(tierAux) : Int64(tierShort)
@@ -374,15 +459,33 @@ extension Dict {
         } else {
             adjusted = base
         }
-        let score = adjusted + (f?.boost(raw, off, len) ?? 0)
+        let canBeClassifier = afterDigit && codeLen == 2 && runes == 1
+        if !admits(best, limit, adjusted + maxFreqBoost + (canBeClassifier ? classifierBoost : 0), codeLen) {
+            return best
+        }
+        let text = decode(raw, off, len)
+        let digitBonus: Int64 = (canBeClassifier && classifiers.contains(text))
+            ? classifierBoost : 0
+        if maxFreqBoost == 0 {
+            let score = adjusted + digitBonus
+            if !admits(best, limit, score, codeLen) {
+                return best
+            }
+            let (codeOff, _) = codeRange(raw, i)
+            return insertCandidate(
+                best, Candidate(text, codeLen, score, code: decode(raw, codeOff, codeLen)), limit)
+        }
+        let (codeOff, _) = codeRange(raw, i)
+        let codeStr = decode(raw, codeOff, codeLen)
+        let score = adjusted + digitBonus + (f?.boost(text, code: codeStr, now: now) ?? 0)
         if !admits(best, limit, score, codeLen) {
             return best
         }
-        return insertCandidate(best, Candidate(decode(raw, off, len), codeLen, score), limit)
+        return insertCandidate(best, Candidate(text, codeLen, score, code: codeStr), limit)
     }
 
     /// 返回某个字母开头的最高频词，用于单键输入（比如 l 打「了」）。
-    public func short(_ letter: UInt8, _ f: Freq?) -> [Candidate] {
+    public func short(_ letter: UInt8, _ f: Freq?, afterDigit: Bool = false) -> [Candidate] {
         guard shortCount > 0 else { return [] }
         return data.withUnsafeBytes { raw in
             var out: [Candidate] = []
@@ -392,19 +495,52 @@ extension Dict {
                 let r = base + i * recordSize
                 let codeLen = Int(raw[r + 12])
                 if codeLen >= 2, raw[blobStart + Int(readU32(raw, r))] == letter {
+                    let codeOff = blobStart + Int(readU32(raw, r))
+                    let codeStr = decode(raw, codeOff, codeLen)
                     let textOff = blobStart + Int(readU32(raw, r + 4))
                     let textLen = Int(raw[r + 13])
                     let text = decode(raw, textOff, textLen)
+                    let digitBonus: Int64 = (afterDigit && classifiers.contains(text))
+                        ? classifierBoost : 0
                     out.append(
                         Candidate(
                             text, codeLen,
                             candidateScore(readU32(raw, r + 8), codeLen, 1)
-                                + (f?.boost(text) ?? 0)))
+                                + digitBonus
+                                + (f?.boost(text, code: codeStr) ?? 0),
+                            code: codeStr))
                 }
                 i += 1
             }
             return out
         }
+    }
+
+    /// 二分查静态二元搭配权重。零分配。
+    func bigramWeight(_ raw: UnsafeRawBufferPointer, _ left: String, _ right: String) -> UInt32 {
+        guard bigramCount > 0, !left.isEmpty, !right.isEmpty else { return 0 }
+        let target = bigramHash(left, right)
+        var lo = 0
+        var hi = bigramCount
+        while lo < hi {
+            let mid = (lo + hi) >> 1
+            let h = readU64(raw, bigramStart + mid * bigramRecordSize)
+            if h < target {
+                lo = mid + 1
+            } else if h > target {
+                hi = mid
+            } else {
+                return readU32(raw, bigramStart + mid * bigramRecordSize + 8)
+            }
+        }
+        return 0
+    }
+
+    func staticBigramBoost(_ raw: UnsafeRawBufferPointer, _ left: String?, _ right: String) -> Double {
+        guard let left, !left.isEmpty else { return 0 }
+        let w = bigramWeight(raw, left, right)
+        guard w > 0 else { return 0 }
+        return composeStaticBigramBoost * min(1.0, log(Double(w) + 1) / log(500_000.0))
     }
 
     /// 一个词条是不是单字辅码。词编码每个音节两键，单字只有两键编码；
@@ -492,53 +628,119 @@ extension Dict {
         let odd = p.count % 2 == 1
         let syls = p.count / 2
         let total = odd ? syls + 1 : syls
-        var best = [Double](repeating: -Double.infinity, count: total + 1)
-        var prev: [Int?] = [Int?](repeating: nil, count: total + 1)
-        var segs = [Int](repeating: 0, count: total + 1)
-        var lastChar: [String?] = [String?](repeating: nil, count: total + 1)
-        /// 到达每个音节边界时选中的段写法，回溯时按边界取回。
-        var chosen: [AltText?] = [AltText?](repeating: nil, count: total + 1)
-        /// 到达每个音节边界时前段末字上下文，供末尾段备选重排沿用。
-        var prevLastAt: [String?] = [String?](repeating: nil, count: total + 1)
-        var lastFinal = UInt8(0)
-        best[0] = 0
+        struct BeamState {
+            var score: Double
+            var prevIdx: Int
+            var prevBeam: Int
+            var segs: Int
+            var alt: AltText
+            var code: String
+            var lastChar: String
+            var prevLastChar: String?
+            var prevWord: String?
+            var lastFinal: UInt8
+        }
+        var beams = [[BeamState]](repeating: [], count: total + 1)
+        let activeCtx = freq?.activeContext()
+        let initialCtx = (activeCtx?.isEmpty ?? true) ? nil : activeCtx
+        beams[0] = [
+            BeamState(
+                score: 0, prevIdx: -1, prevBeam: -1, segs: 0,
+                alt: AltText(text: "", weight: 0), code: "",
+                lastChar: "", prevLastChar: nil, prevWord: nil, lastFinal: 0)
+        ]
 
-        let scanPerEdge = freq == nil ? 1 : altPerSegment
+        let scanPerEdge = (freq == nil && bigramCount == 0) ? 1 : altPerSegment
+
+        func insertBeam(_ to: Int, _ candidate: BeamState) {
+            var list = beams[to]
+            if let sameIdx = list.firstIndex(where: { $0.alt.text == candidate.alt.text }) {
+                if candidate.score > list[sameIdx].score {
+                    list[sameIdx] = candidate
+                    list.sort { $0.score > $1.score }
+                    beams[to] = list
+                }
+                return
+            }
+            list.append(candidate)
+            list.sort { $0.score > $1.score }
+            if list.count > composeBeamWidth {
+                list.removeLast()
+            }
+            beams[to] = list
+        }
 
         func edge(_ from: Int, _ to: Int, _ code: [UInt8], _ final: UInt8?) {
-            guard best[from] != -Double.infinity else { return }
+            guard !beams[from].isEmpty else { return }
             let alts = exactAlts(raw, code, scanPerEdge)
-            guard let top = alts.first else { return }
-            let previous = from == 0 ? freq?.context : lastChar[from]
-            var winner = top
-            var gain = log(Double(top.weight) + 1)
-                + (freq?.wordLogBoost(top.text) ?? 0)
-                + (freq?.segmentBoost(previous, top.text) ?? 0)
-            // 同一段内按「词库权重 + 用户词频 + 接上文」挑写法，让常用字词和接续改变分段结果。
-            for alt in alts.dropFirst() {
-                let g = log(Double(alt.weight) + 1)
-                    + (freq?.wordLogBoost(alt.text) ?? 0)
-                    + (freq?.segmentBoost(previous, alt.text) ?? 0)
-                if g > gain {
-                    gain = g
-                    winner = alt
-                }
-            }
+            guard !alts.isEmpty else { return }
+            let codeStr = String(decoding: code, as: UTF8.self)
             let charPenalty = (to - from == 1) ? singleCharPenalty : 0.0
-            let s = best[from] + gain - segmentPenalty - charPenalty
-            if s > best[to] {
-                best[to] = s
-                prev[to] = from
-                segs[to] = segs[from] + 1
-                chosen[to] = winner
-                lastChar[to] = winner.text.last.map(String.init)
-                prevLastAt[to] = previous
-                if let final { lastFinal = final }
+            for (bIdx, prevState) in beams[from].enumerated() {
+                let previousLast = from == 0 ? initialCtx : prevState.lastChar
+                let previousWord = from == 0 ? nil : prevState.alt.text
+                var winner: AltText?
+                var bestGain = -Double.infinity
+                for alt in alts {
+                    let g = log(Double(alt.weight) + 1)
+                        + (freq?.wordLogBoost(alt.text, code: codeStr) ?? 0)
+                        + (freq?.segmentBoost(previousLast, alt.text) ?? 0)
+                        + staticBigramBoost(raw, previousWord, alt.text)
+                    if g > bestGain {
+                        bestGain = g
+                        winner = alt
+                    }
+                }
+                guard let picked = winner else { continue }
+                let nextScore = prevState.score + bestGain - segmentPenalty - charPenalty
+                // 如果只看末词去重，保留一条第二高分路径以便后续静态搭配反超。
+                let nextState = BeamState(
+                    score: nextScore,
+                    prevIdx: from,
+                    prevBeam: bIdx,
+                    segs: prevState.segs + 1,
+                    alt: picked,
+                    code: codeStr,
+                    lastChar: picked.text.last.map(String.init) ?? "",
+                    prevLastChar: previousLast,
+                    prevWord: previousWord,
+                    lastFinal: final ?? 0)
+                insertBeam(to, nextState)
+                // 若有第二个不同写法且分差不远，也尝试保留到 beam 中供后续二元搭配竞争。
+                if beams[to].count < composeBeamWidth && alts.count > 1 && bigramCount > 0 {
+                    var runnerUp: AltText?
+                    var runnerGain = -Double.infinity
+                    for alt in alts where alt.text != picked.text {
+                        let g = log(Double(alt.weight) + 1)
+                            + (freq?.wordLogBoost(alt.text, code: codeStr) ?? 0)
+                            + (freq?.segmentBoost(previousLast, alt.text) ?? 0)
+                            + staticBigramBoost(raw, previousWord, alt.text)
+                        if g > runnerGain {
+                            runnerGain = g
+                            runnerUp = alt
+                        }
+                    }
+                    if let second = runnerUp {
+                        insertBeam(
+                            to,
+                            BeamState(
+                                score: prevState.score + runnerGain - segmentPenalty - charPenalty,
+                                prevIdx: from,
+                                prevBeam: bIdx,
+                                segs: prevState.segs + 1,
+                                alt: second,
+                                code: codeStr,
+                                lastChar: second.text.last.map(String.init) ?? "",
+                                prevLastChar: previousLast,
+                                prevWord: previousWord,
+                                lastFinal: final ?? 0))
+                    }
+                }
             }
         }
 
         for i in 0..<syls {
-            if best[i] == -Double.infinity { continue }
+            if beams[i].isEmpty { continue }
             var j = i + 1
             while j <= syls && j - i <= maxWordSyllables {
                 edge(i, j, Array(p[(i * 2)..<(j * 2)]), nil)
@@ -551,7 +753,7 @@ extension Dict {
             let from = max(0, total - maxWordSyllables)
             if from <= syls {
                 for i in from...syls {
-                    if best[i] == -Double.infinity { continue }
+                    if beams[i].isEmpty { continue }
                     var code = Array(p[(i * 2)..<p.count])
                     for f in UInt8(ascii: "a")...UInt8(ascii: "z") {
                         code.append(f)
@@ -561,82 +763,89 @@ extension Dict {
                 }
             }
         }
-        guard prev[total] != nil, segs[total] >= 2 else { return [] }
+        guard let winnerState = beams[total].first(where: { $0.segs >= 2 }) else { return [] }
+        guard let winnerBeamIdx = beams[total].firstIndex(where: {
+            $0.segs == winnerState.segs && $0.alt.text == winnerState.alt.text
+        }) else { return [] }
 
-        // 回溯出每段的边界（以音节计）。
-        var ends: [Int] = []
-        ends.reserveCapacity(segs[total])
-        var i = total
-        while i > 0 {
-            ends.append(i)
-            guard let from = prev[i] else { return [] }
-            i = from
+        // 回溯出每段选中的状态。
+        var pathStates: [BeamState] = []
+        pathStates.reserveCapacity(winnerState.segs)
+        var curIdx = total
+        var curBeam = winnerBeamIdx
+        while curIdx > 0 {
+            let st = beams[curIdx][curBeam]
+            pathStates.append(st)
+            curIdx = st.prevIdx
+            curBeam = st.prevBeam
         }
-        ends.reverse()
-        var starts = [Int](repeating: 0, count: ends.count)
-        var from = 0
-        for k in ends.indices {
-            starts[k] = from
-            from = ends[k]
-        }
+        pathStates.reverse()
 
         // 每段的同音备选：普通段直接取 buf 切片；末尾声母段要补上选中的韵母键。
         // 前面各段只用 DP 已选定的最优写法；只为最后一段拉取并重排更多同音备选。
-        var alts: [[AltText]] = []
-        alts.reserveCapacity(ends.count)
-        let lastIdx = ends.count - 1
-        for k in 0..<lastIdx {
-            guard let pick = chosen[ends[k]] else { return [] }
-            alts.append([pick])
+        let lastIdx = pathStates.count - 1
+        let lastState = pathStates[lastIdx]
+        let lastCode = Array(lastState.code.utf8)
+        let rawLastAlts = exactAlts(raw, lastCode, lastSegmentScan)
+        if rawLastAlts.isEmpty { return [] }
+        func lastSegScore(_ x: AltText) -> Double {
+            log(Double(x.weight) + 1)
+                + (freq?.wordLogBoost(x.text, code: lastState.code, maxBoost: composeLastFreqBoost) ?? 0)
+                + (freq?.segmentBoost(lastState.prevLastChar, x.text) ?? 0)
+                + staticBigramBoost(raw, lastState.prevWord, x.text)
         }
-        do {
-            var code: [UInt8]
-            if ends[lastIdx] * 2 <= p.count {
-                code = Array(p[(starts[lastIdx] * 2)..<(ends[lastIdx] * 2)])
-            } else {
-                code = Array(p[(starts[lastIdx] * 2)..<p.count])
-                code.append(lastFinal)
-            }
-            let a = exactAlts(raw, code, lastSegmentScan)
-            if a.isEmpty { return [] }
-            let previous = prevLastAt[ends[lastIdx]]
-            let ranked = a.sorted { x, y in
-                let sx = log(Double(x.weight) + 1)
-                    + (freq?.wordLogBoost(x.text, maxBoost: composeLastFreqBoost) ?? 0)
-                    + (freq?.segmentBoost(previous, x.text) ?? 0)
-                let sy = log(Double(y.weight) + 1)
-                    + (freq?.wordLogBoost(y.text, maxBoost: composeLastFreqBoost) ?? 0)
-                    + (freq?.segmentBoost(previous, y.text) ?? 0)
-                if sx != sy { return sx > sy }
-                return x.weight > y.weight
-            }
-            alts.append(Array(ranked.prefix(lastSegmentAlts)))
+        let rankedLast = rawLastAlts.sorted { x, y in
+            let sx = lastSegScore(x)
+            let sy = lastSegScore(y)
+            if sx != sy { return sx > sy }
+            return x.weight > y.weight
         }
+        var lastAlts = Array(rankedLast.prefix(lastSegmentAlts))
+        if !lastAlts.contains(where: { $0.text == lastState.alt.text }) {
+            lastAlts.insert(lastState.alt, at: 0)
+            if lastAlts.count > lastSegmentAlts { lastAlts.removeLast() }
+        }
+        let mainLast = lastAlts[0]
+        let mainLastScore = lastSegScore(mainLast)
+        let basePrefixScore = winnerState.score - lastSegScore(lastState.alt)
+            + (freq?.wordLogBoost(lastState.alt.text, code: lastState.code) ?? 0)
+            + (freq?.segmentBoost(lastState.prevLastChar, lastState.alt.text) ?? 0)
+            + staticBigramBoost(raw, lastState.prevWord, lastState.alt.text)
+        // 用实际整条路径分（保持末段按 lastSegScore 的排序不变）。
+        let prefixOnlyScore = winnerState.score - (
+            log(Double(lastState.alt.weight) + 1)
+            + (freq?.wordLogBoost(lastState.alt.text, code: lastState.code) ?? 0)
+            + (freq?.segmentBoost(lastState.prevLastChar, lastState.alt.text) ?? 0)
+            + staticBigramBoost(raw, lastState.prevWord, lastState.alt.text)
+        )
+        _ = basePrefixScore
 
+        let bufCode = String(decoding: p, as: UTF8.self)
         var out: [Candidate] = []
-        func emit(_ override: Int, _ alt: AltText) {
+        func emit(_ alt: AltText, isVariant: Bool) {
             var bytes: [UInt8] = []
-            var sum = 0.0
-            for k in ends.indices {
-                let a = k == override ? alt : alts[k][0]
-                bytes.append(contentsOf: a.text.utf8)
-                sum += log(Double(a.weight) + 1)
+            for k in 0..<lastIdx {
+                bytes.append(contentsOf: pathStates[k].alt.text.utf8)
             }
+            bytes.append(contentsOf: alt.text.utf8)
+            let totalLog = prefixOnlyScore + lastSegScore(alt) + segmentPenalty
             // 换字副本比主拼法轻一档：段内选择已经在 DP 里按词频和接续定好，
             // 副本只作为可选的次选，不另造一条同分段句子。
-            let variant = override >= 0 ? composeVariantPenalty : 0.0
-            let logScore = sum - segmentPenalty * Double(ends.count) + segmentPenalty - variant
+            let variant = isVariant ? composeVariantPenalty : 0.0
+            let logScore = totalLog - variant
             let w = (logScore + composeScoreOffset) * composeScoreScale
             let text = String(decoding: bytes, as: UTF8.self)
-            let score = (Int64(tierCompose) << 40 | Int64(clampWeight(w))) + (freq?.boost(text) ?? 0)
-            out = insertCandidate(out, Candidate(text, p.count, score), limit)
+            let score = (Int64(tierCompose) << 40 | Int64(clampWeight(w)))
+                + (freq?.boost(text, code: bufCode) ?? 0)
+            out = insertCandidate(out, Candidate(text, p.count, score, code: bufCode), limit)
         }
-        emit(-1, AltText(text: "", weight: 0))
+        _ = mainLastScore
+        emit(mainLast, isVariant: false)
         // 只为最后一段出同音备选：前面的段换字会一口气刷出整屏同义副本，
         // 把「这个」「输入法」这些真正可选的短词挤到后面。末尾段是用户
         // 正在敲的那一截，换字最可能是想要的，也最不影响已稳定的前文。
-        for alt in alts[lastIdx].dropFirst() {
-            emit(lastIdx, alt)
+        for alt in lastAlts.dropFirst() {
+            emit(alt, isVariant: true)
         }
         return out
     }
@@ -765,6 +974,13 @@ func shortLists(_ entries: [Entry]) -> [Entry] {
 /// 二分查找依赖这个顺序。同编码同权重再按词条字节序排，同一份输入每次生成的
 /// 文件都一样，不随调用方的字典遍历顺序变化。
 public func writeDict(_ entries: [Entry]) -> Data {
+    writeDict(entries, bigrams: [])
+}
+
+/// 把 entries 和可选的静态二元搭配表写成词表格式。写之前按 Code 升序、同 Code 按
+/// Weight 降序排好，二分查找依赖这个顺序。同编码同权重再按词条字节序排，同一份
+/// 输入每次生成的文件都一样，不随调用方的字典遍历顺序变化。
+public func writeDict(_ entries: [Entry], bigrams: [BigramEntry]) -> Data {
     let sorted = entries.sorted { a, b in
         if a.code != b.code {
             return a.code.utf8.lexicographicallyPrecedes(b.code.utf8)
@@ -776,6 +992,20 @@ public func writeDict(_ entries: [Entry]) -> Data {
     }
     let shorts = shortLists(sorted)
     let all = sorted + shorts
+    var sortedBigrams: [BigramEntry] = []
+    if !bigrams.isEmpty {
+        let byHash = bigrams.sorted { $0.hash < $1.hash }
+        sortedBigrams.reserveCapacity(byHash.count)
+        for b in byHash {
+            if let last = sortedBigrams.last, last.hash == b.hash {
+                if b.weight > last.weight {
+                    sortedBigrams[sortedBigrams.count - 1].weight = b.weight
+                }
+            } else {
+                sortedBigrams.append(b)
+            }
+        }
+    }
 
     var blob: [UInt8] = []
     blob.reserveCapacity(all.reduce(0) { $0 + $1.code.utf8.count + $1.text.utf8.count })
@@ -795,6 +1025,17 @@ public func writeDict(_ entries: [Entry]) -> Data {
         recs.append(contentsOf: r)
     }
 
+    var bigramBytes: [UInt8] = []
+    if !sortedBigrams.isEmpty {
+        bigramBytes.reserveCapacity(sortedBigrams.count * bigramRecordSize)
+        for b in sortedBigrams {
+            var r = [UInt8](repeating: 0, count: bigramRecordSize)
+            writeU64(&r, 0, b.hash)
+            writeU32(&r, 8, b.weight)
+            bigramBytes.append(contentsOf: r)
+        }
+    }
+
     var head = [UInt8](repeating: 0, count: headerSize)
     for (i, b) in dictMagicBytes.enumerated() {
         head[i] = b
@@ -802,5 +1043,6 @@ public func writeDict(_ entries: [Entry]) -> Data {
     writeU32(&head, 8, UInt32(sorted.count))
     writeU32(&head, 12, UInt32(blob.count))
     writeU32(&head, 16, UInt32(shorts.count))
-    return Data(head + recs + blob)
+    writeU32(&head, 20, UInt32(sortedBigrams.count))
+    return Data(head + recs + blob + bigramBytes)
 }

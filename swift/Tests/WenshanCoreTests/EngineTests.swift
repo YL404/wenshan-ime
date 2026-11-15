@@ -91,6 +91,26 @@ final class ZiranmaTests: XCTestCase {
             XCTAssertEqual(got, want, "Codes(\(pinyin))")
         }
     }
+
+    /// 万象带调词库的声调符号、ü 与成音节鼻音应归一化为自然码两键编码。
+    func testTonedPinyinNormalization() {
+        let cases: [([String], String)] = [
+            (["nǐ", "hǎo"], "nihk"),
+            (["zhōng", "guó"], "vsgo"),
+            (["lǚ"], "lv"),
+            (["lüè"], "lt"),
+            (["lǜe"], "lt"),
+            (["ńg"], "eg"),
+            (["ng"], "eg"),
+            (["ń"], "ef"),
+            (["ḿ"], "me"),
+            (["nǐ", "lu\u{0308}e"], "nilt"),
+        ]
+        for (pinyin, want) in cases {
+            let got = Ziranma.codes(pinyin)
+            XCTAssertEqual(got.first, want, "TonedCodes(\(pinyin)) = \(got)")
+        }
+    }
 }
 
 // MARK: - 词表与候选流
@@ -1007,5 +1027,124 @@ final class EngineTests: XCTestCase {
         if let i1 = findText(e, "第一") { _ = e.select(i1) }
         if let i2 = findText(e, "次") { _ = e.select(i2) }
         XCTAssertEqual(u.count, 1)
+    }
+
+    /// 在 de 上高频选「的」后，不应污染异读音 di（如 dierpy / di）。
+    func testPolyphonicCodeScopedFreq() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("freq.tsv").path
+        let d = buildDict([
+            Entry(code: "de", text: "的", weight: 1000),
+            Entry(code: "di", text: "地", weight: 5000),
+            Entry(code: "di", text: "的", weight: 4000),
+        ])
+        let e = Engine(dict: d)
+        e.setFreq(Freq.load(path))
+        for _ in 0..<10 {
+            e.reset()
+            typeKeys(e, "de")
+            XCTAssertTrue(e.select(0).1)
+        }
+        try e.save(force: true)
+
+        let reloaded = Freq.load(path)
+        XCTAssertEqual(reloaded.count("的", code: "de"), 10)
+        XCTAssertEqual(reloaded.count("的", code: "di"), 0)
+
+        let e2 = Engine(dict: d)
+        e2.setFreq(reloaded)
+        typeKeys(e2, "di")
+        XCTAssertEqual(e2.candidates.first?.text, "地")
+    }
+
+    /// 上下文接续超过超时窗口后自动失效，标点也清空上下文。
+    func testFreqContextTimeoutAndPunctuationReset() {
+        let f = Freq(pairs: ["们\t你": 10])
+        let t0: TimeInterval = 1000
+        _ = f.bump("们", code: "mf", now: t0)
+        XCTAssertGreaterThan(f.pairBoost("你", now: t0 + 2.0), 0)
+        XCTAssertEqual(f.pairBoost("你", now: t0 + 6.0), 0)
+
+        let d = buildDict([
+            Entry(code: "womf", text: "我们", weight: 5000),
+            Entry(code: "ni", text: "尼", weight: 5000),
+            Entry(code: "ni", text: "你", weight: 4000),
+        ])
+        let e = Engine(dict: d)
+        e.setFreq(Freq(pairs: ["们\t你": 10]))
+        let s = Session(eng: e)
+        typeKeys(s, "womf")
+        XCTAssertEqual(s.punctuate(UInt8(ascii: ",")).text, "我们，")
+        typeKeys(s, "ni")
+        XCTAssertEqual(s.candidates.first?.text, "尼")
+    }
+
+    /// 空格选错词后立即按退格，应撤销刚才写入的词频、接续与自造词。
+    func testImmediateBackspaceRollback() {
+        let d = buildDict([
+            Entry(code: "ni", text: "你", weight: 5000),
+            Entry(code: "ni", text: "尼", weight: 4900),
+            Entry(code: "hk", text: "好", weight: 4000),
+        ])
+        let f = Freq()
+        let u = UserDict(entries: [])
+        let e = Engine(dict: d)
+        e.setFreq(f)
+        e.setUserDict(u)
+        let s = Session(eng: e)
+
+        // 连续单字错选「尼 + 好」学入自造词，随后立即退格应撤掉自造词与词频。
+        typeKeys(s, "nihk")
+        guard let niIdx = e.candidates.firstIndex(where: { $0.text == "尼" }) else {
+            return XCTFail("未找到「尼」: \(candidateTexts(e.candidates))")
+        }
+        XCTAssertEqual(s.select(niIdx).text, "尼")
+        XCTAssertEqual(s.space().text, "好")
+        XCTAssertEqual(f.count("尼", code: "ni"), 1)
+        XCTAssertEqual(f.count("好", code: "hk"), 1)
+        XCTAssertEqual(u.count, 1)
+
+        let r = s.backspace()
+        XCTAssertFalse(r.consumed)
+        XCTAssertEqual(f.count("好", code: "hk"), 0)
+        XCTAssertEqual(u.count, 0)
+    }
+
+    /// 数字后面输入编码时，单字量词获得层内提权；非数字后文不受影响。
+    func testDigitClassifierBoost() {
+        let d = buildDict([
+            Entry(code: "ge", text: "哥", weight: 8_000_000),
+            Entry(code: "ge", text: "个", weight: 3_000_000),
+        ])
+        var docChar: Unicode.Scalar? = "3"
+        let e = Engine(dict: d)
+        let s = Session(eng: e)
+        s.setLookbehind { docChar }
+        typeKeys(s, "ge")
+        XCTAssertEqual(s.candidates.first?.text, "个")
+
+        _ = s.escape()
+        docChar = "我"
+        typeKeys(s, "ge")
+        XCTAssertEqual(s.candidates.first?.text, "哥")
+    }
+
+    /// 静态二元搭配与 Beam=2 组合：前段较低频写法配合后段高频搭配可反超局部高词频错字。
+    func testStaticBigramAndBeamCompose() {
+        let entries = [
+            Entry(code: "lgjg", text: "冷静", weight: 50_000),
+            Entry(code: "de", text: "的", weight: 40_000_000),
+            Entry(code: "de", text: "地", weight: 3_000_000),
+            Entry(code: "ffxi", text: "分析", weight: 100_000),
+        ]
+        let bigrams = [
+            BigramEntry(hash: bigramHash("冷静", "地"), weight: 100_000),
+            BigramEntry(hash: bigramHash("地", "分析"), weight: 100_000),
+        ]
+        let d = try! Dict(data: writeDict(entries, bigrams: bigrams))
+        let e = Engine(dict: d)
+        typeKeys(e, "lgjgdeffxi")
+        XCTAssertEqual(e.candidates.first?.text, "冷静地分析")
     }
 }
