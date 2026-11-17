@@ -11,6 +11,7 @@ enum KeyAction: Equatable {
     case type(String)
     case insert(String)
     case punctuate(String)
+    case punctuateTap
     case space
     case returnKey
     /// 长按回车：非默认回车键（发送/搜索等）时插入换行。
@@ -40,6 +41,8 @@ protocol KeyRowsHost: AnyObject {
     func performLongPress(_ action: KeyAction) -> Bool
     /// 按下或松开：宿主负责触感和按键预览。
     func keyPressChanged(_ key: KeyButton, pressed: Bool)
+    /// 上排键下拉数字状态变化：宿主更新预览和触感。
+    func keyPullDownChanged(_ key: KeyButton, active: Bool)
 }
 
 /// 建好的一页键区，以及按状态要改标题或高亮的几个键。
@@ -61,6 +64,7 @@ struct KeyRowsBuilder {
     weak var host: KeyRowsHost?
 
     private static let letterRows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
+    private static let topRowDigits = Array("1234567890")
 
     func build(_ layer: KeyboardLayer) -> KeyRows {
         var keys = KeyRows()
@@ -76,9 +80,12 @@ struct KeyRowsBuilder {
             ]
         case .letters:
             let rows = Self.letterRows
+            let topRow = rows[0].enumerated().map {
+                makeLetterKey($0.element, pullDownDigit: String(Self.topRowDigits[$0.offset]))
+            }
             keys.rows = [
-                makeRow(rows[0].map(makeLetterKey)),
-                makeRow(rows[1].map(makeLetterKey), margin: metrics.letterWidth / 2),
+                makeRow(topRow),
+                makeRow(rows[1].map { makeLetterKey($0) }, margin: metrics.letterWidth / 2),
                 makeLetterBottomRow(rows[2], keys: &keys),
                 makeLetterFunctionRow(keys: &keys),
             ]
@@ -155,7 +162,7 @@ struct KeyRowsBuilder {
         let sideWidth = metrics.letterWidth * 1.3
         return makeProportionalRow([
             (shift, sideWidth),
-            (makeRow(row.map(makeLetterKey)), nil),
+            (makeRow(row.map { makeLetterKey($0) }), nil),
             (makeDeleteKey(), sideWidth),
         ])
     }
@@ -169,11 +176,11 @@ struct KeyRowsBuilder {
         setLongPress(numbers, .showSymbols)
 
         let punctuation = makeKey(
-            title: "。\n，", identifier: "key_punctuation", action: .punctuate("."),
-            font: smallFont, previewText: "。")
+            title: "，\n。", identifier: "key_punctuation", action: .punctuateTap,
+            font: smallFont, previewText: "，")
         punctuation.titleLabel?.numberOfLines = 2
         punctuation.titleLabel?.textAlignment = .center
-        punctuation.accessibilityLabel = "句号，长按逗号"
+        punctuation.accessibilityLabel = "逗号，双击句号"
         setLongPress(punctuation, .punctuate(","))
         keys.punctuation = punctuation
 
@@ -206,11 +213,24 @@ struct KeyRowsBuilder {
     private var smallFont: UIFont { .systemFont(ofSize: max(11, metrics.keyFontSize - 9)) }
     private var numberFont: UIFont { .systemFont(ofSize: metrics.keyFontSize + 1) }
 
-    private func makeLetterKey(_ character: Character) -> KeyButton {
+    private func makeLetterKey(_ character: Character, pullDownDigit: String? = nil) -> KeyButton {
         let key = makeKey(
             title: String(character), identifier: "key_\(character)",
             action: .type(String(character)))
         key.keyLetter = character.asciiValue
+        if let digit = pullDownDigit {
+            key.setSubTitle(digit, fontSize: max(9, round(metrics.keyFontSize * 0.42)))
+            key.pullDownText = digit
+            key.accessibilityHint = "下拉输入数字 \(digit)"
+            let keyEvents = keyEvents
+            key.onPullDown = { [weak key] in
+                guard let key else { return }
+                keyEvents.commit(key.eventSequence) { host?.perform(.insert(digit)) }
+            }
+            key.onPullDownChanged = { button, active in
+                host?.keyPullDownChanged(button, active: active)
+            }
+        }
         return key
     }
 
@@ -225,14 +245,8 @@ struct KeyRowsBuilder {
             title: "空格", identifier: "key_space", action: .space,
             background: background, font: functionFont, showsPreview: false)
         space.accessibilityLabel = "空格"
-        space.accessibilityHint = "长按拖动移动光标"
-        space.dragRequiresLongPress = true
-        space.dragStep = 5
-        space.dragVerticalLimit = 50
+        space.accessibilityHint = "左右滑动移动光标"
         setLongPress(space, .cursorDrag)
-        space.onDrag = { delta in
-            host?.perform(.moveCursor(Int(delta)))
-        }
         return space
     }
 

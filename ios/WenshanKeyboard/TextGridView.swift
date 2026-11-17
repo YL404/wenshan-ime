@@ -122,7 +122,11 @@ final class TextGridView: UIView {
         }
         let text = items[indexPath.item]
         let itemStyle = style(indexPath.item, text)
-        let textWidth = (text as NSString).size(withAttributes: [.font: itemStyle.font]).width
+        let textWidth = (text as NSString).boundingRect(
+            with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: Self.cellHeight),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: itemStyle.font],
+            context: nil).width
         let desiredWidth = ceil(textWidth) + itemStyle.inset * 2 + 4
         let maxWidth = max(minWidth, collectionView.bounds.width - 2 * Self.padding)
         return CGSize(width: min(maxWidth, max(minWidth, desiredWidth)), height: Self.cellHeight)

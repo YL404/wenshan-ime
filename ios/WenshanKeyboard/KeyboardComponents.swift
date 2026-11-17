@@ -1,4 +1,5 @@
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import WenshanCore
 
 /// 键盘尺寸。iPhone 保持紧凑两档；iPad 按屏幕高度分档，浮动/分屏单独一档。
@@ -194,9 +195,14 @@ final class KeyButton: UIButton {
     /// 横向拖动步长，正数向右，负数向左。
     var onDrag: ((CGFloat) -> Void)?
     var onPressChanged: ((Bool) -> Void)?
+    var onPullDown: (() -> Void)?
+    var onPullDownChanged: ((KeyButton, Bool) -> Void)?
 
     var showsPreview = true
     var previewText: String?
+    var pullDownText: String?
+    var pullDownThreshold: CGFloat = 16
+    private(set) var isPullDownActive = false
     /// 删除键按下即生效，不等抬起。
     var triggersOnPress = false
     var repeatDelay: TimeInterval = 0.45
@@ -231,6 +237,7 @@ final class KeyButton: UIButton {
     private var longPressTimer: Timer?
     private var repeatDelayTimer: Timer?
     private var repeatTimer: Timer?
+    private var subLabel: UILabel?
 
     init(title: String, identifier: String, font: UIFont, background: UIColor = KeyboardPalette.key) {
         normalBackground = background
@@ -267,6 +274,7 @@ final class KeyButton: UIButton {
     /// 键盘切页、收起或视图重建时调用，停掉计时器并释放队列里的按键。
     func cancelInteraction() {
         let hadTouch = touchActive
+        isHighlighted = false
         finishTracking()
         if hadTouch { onCancelled?() }
     }
@@ -294,6 +302,32 @@ final class KeyButton: UIButton {
         self.active = active
         updateBackground()
         setTitleColor(active ? .white : .label, for: .normal)
+        subLabel?.textColor = active ? UIColor.white.withAlphaComponent(0.75) : .secondaryLabel
+    }
+
+    func setSubTitle(_ text: String?, fontSize: CGFloat = 10) {
+        guard let text, !text.isEmpty else {
+            subLabel?.isHidden = true
+            return
+        }
+        let label = subLabel ?? {
+            let view = UILabel()
+            view.textColor = .secondaryLabel
+            view.textAlignment = .right
+            view.isUserInteractionEnabled = false
+            view.isAccessibilityElement = false
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+            NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+                view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -3.5),
+            ])
+            subLabel = view
+            return view
+        }()
+        label.text = text
+        label.font = .systemFont(ofSize: fontSize, weight: .regular)
+        label.isHidden = false
     }
 
     override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
@@ -302,6 +336,7 @@ final class KeyButton: UIButton {
         didLongPress = false
         didRepeat = false
         isDragging = false
+        isPullDownActive = false
         eventSequence = -1
         let location = touch.location(in: self)
         dragStartX = location.x
@@ -322,12 +357,25 @@ final class KeyButton: UIButton {
 
     override func continueTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
         let result = super.continueTracking(touch, with: event)
-        guard touchActive, let onDrag else { return result }
-        if dragRequiresLongPress && !didLongPress { return result }
-
+        guard touchActive else { return result }
         let location = touch.location(in: self)
         let dx = location.x - dragStartX
         let dy = location.y - dragStartY
+        if pullDownText != nil {
+            if !isPullDownActive {
+                if dy >= pullDownThreshold && dy > abs(dx) * 1.1 {
+                    isPullDownActive = true
+                    cancelTimers()
+                    onPullDownChanged?(self, true)
+                }
+            } else if dy < 6 {
+                isPullDownActive = false
+                onPullDownChanged?(self, false)
+            }
+        }
+        guard !isPullDownActive, let onDrag else { return result }
+        if dragRequiresLongPress && !didLongPress { return result }
+
         if let dragVerticalLimit, abs(dy) > dragVerticalLimit { return result }
         if !isDragging {
             let crossed = dragOnlyLeft ? dx <= -dragStep : abs(dx) >= dragStep
@@ -347,11 +395,14 @@ final class KeyButton: UIButton {
         let inside = touch.map {
             bounds.insetBy(dx: -10, dy: -10).contains($0.location(in: self))
         } ?? false
+        let shouldPullDown = touchActive && isPullDownActive && onPullDown != nil
         // cancelInteraction 之后 UIKit 仍可能补发 endTracking，那次触摸已经取消，不能再算轻点。
-        let shouldTap = touchActive && inside && !didLongPress && !didRepeat
+        let shouldTap = touchActive && inside && !didLongPress && !didRepeat && !shouldPullDown
         finishTracking()
         super.endTracking(touch, with: event)
-        if shouldTap {
+        if shouldPullDown {
+            onPullDown?()
+        } else if shouldTap {
             onTap?()
         } else {
             onCancelled?()
@@ -360,9 +411,10 @@ final class KeyButton: UIButton {
     }
 
     override func cancelTracking(with event: UIEvent?) {
+        let hadTouch = touchActive
         finishTracking()
         super.cancelTracking(with: event)
-        onCancelled?()
+        if hadTouch { onCancelled?() }
     }
 
     private func updateBackground() {
@@ -396,11 +448,13 @@ final class KeyButton: UIButton {
     }
 
     private func finishTracking() {
+        let wasActive = touchActive
         touchActive = false
         isDragging = false
+        isPullDownActive = false
         cancelTimers()
         if !isHighlighted { transform = .identity }
-        onPressChanged?(false)
+        if wasActive { onPressChanged?(false) }
     }
 
     private func cancelTimers() {
@@ -474,9 +528,17 @@ final class KeyPreviewView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func show(text: String, keyFrame: CGRect, font: UIFont, in container: UIView) {
+    func show(
+        text: String,
+        keyFrame: CGRect,
+        font: UIFont,
+        highlighted: Bool = false,
+        preferAbove: Bool = false,
+        in container: UIView
+    ) {
         label.text = text
         label.font = font
+        label.textColor = highlighted ? KeyboardPalette.accent : .label
 
         let width = max(keyFrame.width, 44)
         let height = keyFrame.height + 8
@@ -484,7 +546,7 @@ final class KeyPreviewView: UIView {
         let x = min(max(4, keyFrame.midX - width / 2), maxX)
         var y = keyFrame.minY - height - 4
         if y < 4 {
-            y = min(keyFrame.maxY + 4, container.bounds.height - height - 4)
+            y = preferAbove ? 4 : min(keyFrame.maxY + 4, container.bounds.height - height - 4)
         }
         frame = CGRect(x: x, y: y, width: width, height: height)
         if isHidden {
@@ -505,5 +567,59 @@ final class KeyPreviewView: UIView {
         isHidden = true
         alpha = 1
         transform = .identity
+    }
+}
+
+/// 键区单指横向滑动手势：未达到横向阈值前保持 .possible，让按键轻点和第一排下拉不受干扰。
+final class CursorPanGestureRecognizer: UIPanGestureRecognizer {
+    var requiredHorizontalDistance: () -> CGFloat = { 18 }
+    var isDirectionGateRelaxed: () -> Bool = { false }
+    var shouldFailForVerticalPull: (CGPoint) -> Bool = { delta in
+        abs(delta.y) >= 14 && abs(delta.y) >= abs(delta.x)
+    }
+
+    private var startPoint: CGPoint = .zero
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let touch = touches.first {
+            startPoint = touch.location(in: view)
+        }
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .possible, let touch = touches.first {
+            let current = touch.location(in: view)
+            let dx = current.x - startPoint.x
+            let dy = current.y - startPoint.y
+            let relaxed = isDirectionGateRelaxed()
+            if !relaxed && shouldFailForVerticalPull(CGPoint(x: dx, y: dy)) {
+                state = .failed
+                return
+            }
+            if abs(dx) < requiredHorizontalDistance() {
+                return
+            }
+            if !relaxed && abs(dx) <= abs(dy) * 1.4 {
+                state = .failed
+                return
+            }
+            guard delegate?.gestureRecognizerShouldBegin?(self) ?? true else {
+                state = .failed
+                return
+            }
+            super.touchesMoved(touches, with: event)
+            if state == .possible {
+                state = .began
+            }
+            setTranslation(.zero, in: view)
+            return
+        }
+        super.touchesMoved(touches, with: event)
+    }
+
+    override func reset() {
+        startPoint = .zero
+        super.reset()
     }
 }

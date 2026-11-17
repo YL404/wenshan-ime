@@ -25,6 +25,7 @@ final class KeyboardViewController: UIInputViewController {
     private let root = UIStackView()
     private let keyPreview = KeyPreviewView()
     private let keyEvents = KeyEventQueue()
+    private let cursorPan = CursorPanGestureRecognizer()
     private var keyFeedback = UIImpactFeedbackGenerator(style: .medium)
     private let selectionFeedback = UISelectionFeedbackGenerator()
     private var keyFeedbackStyle: UIImpactFeedbackGenerator.FeedbackStyle = .medium
@@ -39,6 +40,12 @@ final class KeyboardViewController: UIInputViewController {
     private var layer: KeyboardLayer = .letters
     private var overlay: Overlay = .none
     private var candidatePanelItems: [String] = []
+    private var cursorDragLastStep = 0
+    private var spaceCursorDragReady = false
+    private var lastChinesePunctTap: (at: TimeInterval, text: String)?
+
+    private static let cursorDragStep: CGFloat = 8
+    private static let punctuationDoubleTapWindow: TimeInterval = 0.35
 
     override func loadView() {
         // 原生皮肤：键盘底板交给 UIInputView 的系统材质，不再画自己的背景。
@@ -81,6 +88,8 @@ final class KeyboardViewController: UIInputViewController {
             applySettings()
         }
         setOverlay(.none)
+        lastChinesePunctTap = nil
+        spaceCursorDragReady = false
         layer = .letters
         renderKeyboardRows()
         registerKeyGeometry()
@@ -97,6 +106,8 @@ final class KeyboardViewController: UIInputViewController {
         writer.clearMarkedText()
         hidePreview()
         keyEvents.reset()
+        lastChinesePunctTap = nil
+        spaceCursorDragReady = false
         setOverlay(.none)
         candidateBar.setCandidates([])
         diagnostic.log("keyboard_hidden", memory: true)
@@ -163,6 +174,7 @@ final class KeyboardViewController: UIInputViewController {
     /// render 会顺带清掉 marked text。
     private func handleExternalChange() {
         dismissOverlay(.symbols)
+        lastChinesePunctTap = nil
         model.editorDidChange()
         guard model.isComposing else { return }
         model.reset()
@@ -254,6 +266,21 @@ final class KeyboardViewController: UIInputViewController {
         keyboardStack.distribution = .fillEqually
         keyboardStack.alignment = .fill
         keyboardStack.translatesAutoresizingMaskIntoConstraints = false
+
+        cursorPan.maximumNumberOfTouches = 1
+        cursorPan.minimumNumberOfTouches = 1
+        cursorPan.delaysTouchesBegan = false
+        cursorPan.delaysTouchesEnded = false
+        cursorPan.cancelsTouchesInView = true
+        cursorPan.delegate = self
+        cursorPan.requiredHorizontalDistance = { [weak self] in
+            self?.spaceCursorDragReady == true ? 4 : 18
+        }
+        cursorPan.isDirectionGateRelaxed = { [weak self] in
+            self?.spaceCursorDragReady == true
+        }
+        cursorPan.addTarget(self, action: #selector(handleCursorPan(_:)))
+        keyboardStack.addGestureRecognizer(cursorPan)
 
         root.axis = .vertical
         root.spacing = metrics.gap
@@ -472,6 +499,7 @@ final class KeyboardViewController: UIInputViewController {
 
     /// 从候选条、全部候选或符号面板选中一项：关面板、触感、上屏。
     private func pick(_ outcome: KeyboardOutcome) {
+        lastChinesePunctTap = nil
         setOverlay(.none)
         playSelectionFeedback()
         apply(outcome)
@@ -495,9 +523,12 @@ final class KeyboardViewController: UIInputViewController {
         selectionFeedback.prepare()
     }
 
-    private func showPreview(for button: KeyButton) {
+    private func showPreview(for button: KeyButton, pullDown: Bool = false) {
         guard button.showsPreview, !button.isHidden else { return }
-        let text = button.previewText ?? button.title(for: .normal) ?? ""
+        let text = (pullDown ? button.pullDownText : nil)
+            ?? button.previewText
+            ?? button.title(for: .normal)
+            ?? ""
         guard !text.isEmpty else { return }
         let frame = button.convert(button.bounds, to: view)
         previewedButton = button
@@ -505,6 +536,8 @@ final class KeyboardViewController: UIInputViewController {
             text: text,
             keyFrame: frame,
             font: .systemFont(ofSize: metrics.keyFontSize + 4),
+            highlighted: pullDown,
+            preferAbove: pullDown,
             in: view)
     }
 
@@ -585,8 +618,9 @@ final class KeyboardViewController: UIInputViewController {
         keys.shift?.setActive(model.shift.isActive)
         keys.mode?.setTitle(chinese ? "中" : "英", for: .normal)
         keys.mode?.accessibilityLabel = chinese ? "中文模式，点击切换英文" : "英文模式，点击切换中文"
-        keys.punctuation?.setTitle(chinese ? "。\n，" : ".\n,", for: .normal)
-        keys.punctuation?.previewText = chinese ? "。" : "."
+        keys.punctuation?.setTitle(chinese ? "，\n。" : ".\n,", for: .normal)
+        keys.punctuation?.previewText = chinese ? (model.fullWidth ? "，" : ",") : "."
+        keys.punctuation?.accessibilityLabel = chinese ? "逗号，双击句号" : "句号，长按逗号"
         keys.returnKey?.setTitle(model.returnKeyTitle, for: .normal)
         keys.returnKey?.accessibilityLabel = model.returnKeyTitle
         keys.returnKey?.setActive(model.isReturnKeyProminent)
@@ -628,6 +662,9 @@ final class KeyboardViewController: UIInputViewController {
 
 extension KeyboardViewController: KeyRowsHost {
     func perform(_ action: KeyAction) {
+        if action != .punctuateTap {
+            lastChinesePunctTap = nil
+        }
         switch action {
         case .type(let key):
             apply(model.type(key))
@@ -635,6 +672,8 @@ extension KeyboardViewController: KeyRowsHost {
             apply(model.insert(text))
         case .punctuate(let ch):
             apply(model.punctuate(ch))
+        case .punctuateTap:
+            handlePunctuationTap()
         case .space:
             apply(model.space())
         case .returnKey:
@@ -651,7 +690,6 @@ extension KeyboardViewController: KeyRowsHost {
             guard steps != 0 else { return }
             writer.clearRecentOwnEdit()
             writer.moveCursor(by: steps)
-            playSelectionFeedback()
         case .cursorDrag:
             break
         case .shift:
@@ -676,12 +714,16 @@ extension KeyboardViewController: KeyRowsHost {
 
     func performLongPress(_ action: KeyAction) -> Bool {
         switch action {
+        case .punctuate(","):
+            guard model.mode == .english else { return false }
         case .newline:
             // 组合态回车是「确认」，默认回车键本来就换行，这两种情况长按不另做事。
             guard !model.isComposing, model.returnKeyType != .default else { return false }
         case .cursorDrag:
             // 组合态空格是上屏首选，不拖光标。
-            return !model.isComposing
+            guard !model.isComposing else { return false }
+            spaceCursorDragReady = true
+            return true
         default:
             break
         }
@@ -697,8 +739,103 @@ extension KeyboardViewController: KeyRowsHost {
             playKeyFeedback()
             showPreview(for: key)
         } else {
+            if key.accessibilityIdentifier == "key_space" {
+                spaceCursorDragReady = false
+            }
             hidePreview(for: key)
         }
+    }
+
+    func keyPullDownChanged(_ key: KeyButton, active: Bool) {
+        if active {
+            lastChinesePunctTap = nil
+            playSelectionFeedback()
+            showPreview(for: key, pullDown: true)
+        } else if previewedButton === key {
+            showPreview(for: key, pullDown: false)
+        }
+    }
+
+    private func handlePunctuationTap() {
+        guard model.mode == .chinese else {
+            lastChinesePunctTap = nil
+            apply(model.punctuate("."))
+            return
+        }
+        let now = Date.timeIntervalSinceReferenceDate
+        if let last = lastChinesePunctTap,
+           now - last.at < Self.punctuationDoubleTapWindow,
+           !model.isComposing,
+           writer.contextBefore.hasSuffix(last.text) {
+            lastChinesePunctTap = nil
+            writer.deleteBackward(times: last.text.count)
+            apply(model.punctuate("."))
+            return
+        }
+        let outcome = model.punctuate(",")
+        apply(outcome)
+        if case .commit(let text, _, let caretOffset) = outcome,
+           caretOffset == 0,
+           let lastChar = text.last,
+           lastChar == "，" || lastChar == "," {
+            lastChinesePunctTap = (now, String(lastChar))
+        } else {
+            lastChinesePunctTap = nil
+        }
+    }
+
+    private func cancelActiveKeyInteractions() {
+        for button in allKeyButtons(in: keys.rows) {
+            button.cancelInteraction()
+        }
+        hidePreview()
+    }
+
+    @objc private func handleCursorPan(_ recognizer: CursorPanGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            cursorDragLastStep = 0
+            lastChinesePunctTap = nil
+            cancelActiveKeyInteractions()
+        case .changed:
+            let dx = recognizer.translation(in: keyboardStack).x
+            let step = Int(dx / Self.cursorDragStep)
+            let delta = step - cursorDragLastStep
+            if delta != 0 {
+                cursorDragLastStep = step
+                perform(.moveCursor(delta))
+            }
+        case .ended, .cancelled, .failed:
+            cursorDragLastStep = 0
+            spaceCursorDragReady = false
+        default:
+            break
+        }
+    }
+}
+
+extension KeyboardViewController: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer === cursorPan else { return true }
+        guard overlay == .none, !model.isComposing else { return false }
+        let point = touch.location(in: keyboardStack)
+        var current = keyboardStack.hitTest(point, with: nil)
+        while let view = current {
+            if view.accessibilityIdentifier == "key_delete" {
+                return false
+            }
+            if view === keyboardStack {
+                break
+            }
+            current = view.superview
+        }
+        return true
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === cursorPan else { return true }
+        guard overlay == .none, !model.isComposing else { return false }
+        return !allKeyButtons(in: keys.rows).contains(where: \.isPullDownActive)
     }
 }
 

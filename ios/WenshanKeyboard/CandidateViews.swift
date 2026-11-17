@@ -267,8 +267,9 @@ final class CandidateBar: UIView {
         guard changed else { return }
         self.candidates = candidates
         hasMoreCandidates = hasMore
-        cachedWidths = candidates.map(measureWidth)
+        cachedWidths = candidates.enumerated().map { measureWidth(for: $0.element, isFirst: $0.offset == 0) }
         collectionView.reloadData()
+        layout.invalidateLayout()
         if !candidates.isEmpty {
             collectionView.setContentOffset(.zero, animated: false)
         }
@@ -279,7 +280,7 @@ final class CandidateBar: UIView {
     func setCandidateFont(_ font: UIFont) {
         guard font != self.font else { return }
         self.font = font
-        cachedWidths = candidates.map(measureWidth)
+        cachedWidths = candidates.enumerated().map { measureWidth(for: $0.element, isFirst: $0.offset == 0) }
         collectionView.reloadData()
         collectionView.collectionViewLayout.invalidateLayout()
     }
@@ -308,9 +309,16 @@ final class CandidateBar: UIView {
         return collectionView
     }
 
-    private func measureWidth(for text: String) -> CGFloat {
-        let width = (text as NSString).size(withAttributes: [.font: font]).width + 22
-        return max(44, ceil(width))
+    private func measureWidth(for text: String, isFirst: Bool) -> CGFloat {
+        let targetFont = isFirst
+            ? UIFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+            : font
+        let rect = (text as NSString).boundingRect(
+            with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: 44),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: targetFont],
+            context: nil)
+        return max(44, ceil(rect.width) + 26)
     }
 
     private func loadMoreIfNeeded() {
@@ -335,7 +343,7 @@ final class CandidateBar: UIView {
             hasMoreCandidates = batch.hasMore
             guard batch.items.count > candidates.count else { break }
             let appended = Array(batch.items[candidates.count...])
-            let widths = appended.map(measureWidth)
+            let widths = appended.map { measureWidth(for: $0, isFirst: false) }
             candidates.append(contentsOf: appended)
             cachedWidths.append(contentsOf: widths)
             contentWidth += widths.reduce(0, +) + CGFloat(widths.count) * layout.minimumLineSpacing
@@ -374,7 +382,7 @@ extension CandidateBar: UICollectionViewDataSource, UICollectionViewDelegateFlow
     ) -> CGSize {
         let width = cachedWidths.indices.contains(indexPath.item)
             ? cachedWidths[indexPath.item]
-            : measureWidth(for: candidates[indexPath.item])
+            : measureWidth(for: candidates[indexPath.item], isFirst: indexPath.item == 0)
         let height = collectionView.bounds.height > 0 ? floor(collectionView.bounds.height) : 36
         return CGSize(width: width, height: max(30, height))
     }
@@ -459,6 +467,7 @@ final class CandidateCell: PressableCell {
     func configure(text: String, index: Int, font: UIFont, isFirst: Bool) {
         label.text = text
         label.font = isFirst ? .systemFont(ofSize: font.pointSize, weight: .semibold) : font
+        setNeedsLayout()
         label.textColor = isFirst ? KeyboardPalette.accent : .label
         pillView.isHidden = !isFirst
         accessibilityIdentifier = "candidate_\(index)"
